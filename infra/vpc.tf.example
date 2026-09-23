@@ -1,0 +1,110 @@
+# VPC-hardened variant — NOT part of the default build (decision D-020).
+#
+# The default build runs SageMaker jobs in AWS's managed VPC (no VpcConfig) and reaches
+# S3/Glue/Athena over public AWS endpoints with SigV4. That is fine for public open data
+# and keeps the series inside its $8 budget.
+#
+# For a regulated customer you would instead run every SageMaker job inside your own VPC,
+# in private subnets with NO internet egress, reaching AWS APIs only through VPC endpoints.
+# This file is the Terraform for that. To use it:
+#   1. rename to vpc.tf
+#   2. `terraform apply`
+#   3. pass subnet_ids + security_group_ids into every SageMaker job / pipeline step
+#      (Processor(..., network_config=NetworkConfig(subnets=..., security_group_ids=...)))
+#
+# Cost note: the 6 interface endpoints below bill ~$0.01/hr each (~$7.30/mo) + data
+# processing — roughly $44/mo before any compute. That is why the default build omits it.
+
+locals {
+  azs         = ["${var.region}a", "${var.region}b"]
+  vpc_cidr    = "10.0.0.0/16"
+  subnet_bits = 8 # /24 subnets
+}
+
+resource "aws_vpc" "main" {
+  cidr_block           = local.vpc_cidr
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+  tags                 = { Name = "${local.name}-vpc" }
+}
+
+# Private subnets only — no public subnet, no IGW, no NAT.
+resource "aws_subnet" "private" {
+  for_each          = toset(local.azs)
+  vpc_id            = aws_vpc.main.id
+  availability_zone = each.value
+  cidr_block        = cidrsubnet(local.vpc_cidr, local.subnet_bits, index(local.azs, each.value))
+  tags              = { Name = "${local.name}-private-${each.value}" }
+}
+
+resource "aws_route_table" "private" {
+  vpc_id = aws_vpc.main.id
+  tags   = { Name = "${local.name}-private" }
+}
+
+resource "aws_route_table_association" "private" {
+  for_each       = aws_subnet.private
+  subnet_id      = each.value.id
+  route_table_id = aws_route_table.private.id
+}
+
+# Security group for the SageMaker job ENIs: egress 443 to the endpoints only.
+resource "aws_security_group" "sagemaker" {
+  name_prefix = "${local.name}-sagemaker-"
+  vpc_id      = aws_vpc.main.id
+
+  egress {
+    description = "HTTPS to VPC endpoints and S3 prefix list"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = [local.vpc_cidr]
+  }
+  # self-ingress so distributed training ranks can talk to each other
+  ingress {
+    from_port = 0
+    to_port   = 0
+    protocol  = "-1"
+    self      = true
+  }
+  tags = { Name = "${local.name}-sagemaker" }
+}
+
+# --- Gateway endpoint: S3 (free) ---
+resource "aws_vpc_endpoint" "s3" {
+  vpc_id            = aws_vpc.main.id
+  service_name      = "com.amazonaws.${var.region}.s3"
+  vpc_endpoint_type = "Gateway"
+  route_table_ids   = [aws_route_table.private.id]
+}
+
+# --- Interface endpoints (each ~$7.30/mo) ---
+locals {
+  interface_endpoints = [
+    "sagemaker.api",
+    "sagemaker.runtime",
+    "ecr.api",
+    "ecr.dkr",
+    "logs",       # CloudWatch Logs
+    "sts",
+    "monitoring", # CloudWatch metrics (PutMetricData from jobs)
+  ]
+}
+
+resource "aws_vpc_endpoint" "interface" {
+  for_each            = toset(local.interface_endpoints)
+  vpc_id              = aws_vpc.main.id
+  service_name        = "com.amazonaws.${var.region}.${each.value}"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = [for s in aws_subnet.private : s.id]
+  security_group_ids  = [aws_security_group.sagemaker.id]
+  private_dns_enabled = true
+}
+
+output "sagemaker_vpc_subnet_ids" {
+  value = [for s in aws_subnet.private : s.id]
+}
+
+output "sagemaker_vpc_security_group_id" {
+  value = aws_security_group.sagemaker.id
+}

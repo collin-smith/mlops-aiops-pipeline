@@ -1,0 +1,13 @@
+# Copy to terraform.tfvars (git-ignored) and fill in.
+
+region        = "ca-central-1"
+project       = "mlops-aiops"
+bucket_suffix = "cs4821" # your initials + a few digits; makes the S3 name globally unique
+alert_email   = "you@example.com"
+github_repo   = "collin-smith/mlops-aiops-pipeline"
+
+budget_warn_usd        = 15
+budget_hardstop_usd    = 25
+budget_forecast_warn_usd = 10
+series_start           = "2026-09-01_00:00" # first of the month the build starts
+enable_budget_hardstop = true

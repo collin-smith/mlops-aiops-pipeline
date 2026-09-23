@@ -1,0 +1,7 @@
+# Copy to backend.hcl (git-ignored) and set the bucket to the one created in
+# Stage 1 runbook step 2. Then: terraform init -backend-config=backend.hcl
+bucket       = "mlops-aiops-tfstate-<account-id>"
+key          = "base/terraform.tfstate"
+region       = "ca-central-1"
+encrypt      = true
+use_lockfile = true

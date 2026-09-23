@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.uv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Local data — never commit the 311 extract or derived files
+data/
+*.parquet
+*.csv
+*.json.gz
+*.ndjson
+
+# Local Claude Code settings
+.claude/
+
+# Secrets / local config
+.env
+*.pem
+
+# Terraform
+infra/.terraform/
+infra/.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+infra/backend.hcl
+crash.log
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/

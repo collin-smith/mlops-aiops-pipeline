@@ -1,0 +1,32 @@
+# Stage 5 wires this up. Committed now as a disabled stub so the OIDC role and repo
+# secrets can be set up early. Does nothing until `workflow_dispatch` is run manually
+# or the schedule is uncommented.
+name: retrain
+
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: "0 7 1 * *" # 07:00 UTC on the 1st — matches the data's real cadence
+
+permissions:
+  id-token: write # OIDC
+  contents: read
+
+jobs:
+  retrain:
+    if: false # <- Stage 5 flips this on
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.12"
+      - run: uv sync --extra ml
+      - name: Pull latest data + run pipeline (challenger)
+        run: uv run python -m src.pipeline.definition --run --asof "$(date +%F)"
+      - name: Champion / challenger promotion
+        run: uv run python -m src.promote.champion_challenger --guardband 0.005

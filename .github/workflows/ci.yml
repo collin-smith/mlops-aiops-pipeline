@@ -1,0 +1,63 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  no-endpoint-guardrail:
+    # Enforces the series' no-always-on-endpoint constraint (D-007, amended by D-029). If
+    # this fails, someone added code that stands up a SageMaker endpoint that bills 24/7.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail if endpoint-creation code appears outside the Stage 6 demo
+        run: |
+          # src/, notebooks/ and scripts/. infra/budgets.tf names CreateEndpoint* inside a
+          # Deny statement on purpose, so Terraform is intentionally not scanned here.
+          # The ONE allowed exception is scripts/serverless_demo.py (D-029): a hand-run,
+          # Serverless-only demo that deletes what it creates. Nothing else gets excluded.
+          if grep -rniE \
+            'create_endpoint|create_endpoint_config|EndpointConfig|\.deploy\(' \
+            --include='*.py' --include='*.ipynb' --exclude='serverless_demo.py' \
+            src/ notebooks/ scripts/ 2>/dev/null; then
+            echo "::error::real-time endpoint code detected — only scripts/serverless_demo.py may create one"
+            exit 1
+          fi
+          echo "ok: no endpoint-creation code outside the Stage 6 demo"
+      - name: Fail if provisioned concurrency appears anywhere
+        run: |
+          # Provisioned concurrency gives a Serverless endpoint an idle charge — the exact
+          # 24/7 bill D-007 exists to prevent. Not allowed anywhere, including the demo.
+          if grep -rnI 'ProvisionedConcurrency' --include='*.py' --include='*.ipynb' \
+            --include='*.tf' --include='*.json' --include='*.yml' \
+            --exclude='ci.yml' --exclude='test_serverless_demo.py' .; then
+            echo "::error::ProvisionedConcurrency found — Serverless endpoints must not bill while idle"
+            exit 1
+          fi
+          echo "ok: no provisioned concurrency"
+
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.12"
+      - run: uv sync --extra dev
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run pytest -q
+
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false
+      - run: terraform validate
