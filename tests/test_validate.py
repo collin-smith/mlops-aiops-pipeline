@@ -12,6 +12,7 @@ from src.pipeline.validate import (
     Thresholds,
     build_report,
     main,
+    stale_bulk_close_mask,
     validate,
 )
 
@@ -126,7 +127,7 @@ def test_montgomery_style_bulk_close_warns(requests_frame):
     # structural checks are unaffected: it's a warning, not a failure
     report = build_report(list(results.values()), asof=_asof(df), strict=False)
     assert report["passed"]
-    assert set(report["warnings"]) == {"bulk_close", "group_outliers"}
+    assert set(report["warnings"]) == {"bulk_close", "stale_bulk_close", "group_outliers"}
 
 
 def test_slow_but_genuine_community_is_not_flagged(requests_frame):
@@ -165,6 +166,58 @@ def test_strict_turns_warnings_into_failures(tmp_path, requests_frame):
     df.to_parquet(in_dir / "part-0.parquet")
     args = ["--input", str(in_dir), "--output", str(out_dir), "--asof", str(_asof(df).date())]
 
-    assert main(args, thresholds=SMALL)["warnings"] == ["bulk_close", "group_outliers"]
+    warnings = main(args, thresholds=SMALL)["warnings"]
+    assert warnings == ["bulk_close", "stale_bulk_close", "group_outliers"]
     with pytest.raises(DataValidationError, match="bulk_close"):
         main([*args, "--strict"], thresholds=SMALL)
+
+
+def _closed_together(df, category, ages_days, comms, close_day="2025-08-26"):
+    """Tickets of one category, all closed on ``close_day``, each ``ages_days`` old."""
+    day = pd.Timestamp(close_day, tz="UTC")
+    rows = [
+        {
+            **df.iloc[0].to_dict(),
+            "service_request_id": f"SR-P{i:05d}",
+            "requested_date": (day - pd.Timedelta(days=float(age))).isoformat(),
+            "closed_date": day.isoformat(),
+            "service_name": category,
+            "comm_name": comms[i % len(comms)],
+        }
+        for i, age in enumerate(ages_days)
+    ]
+    return pd.concat([df, pd.DataFrame(rows)], ignore_index=True)
+
+
+def test_citywide_purge_is_flagged_even_when_no_community_looks_odd(requests_frame):
+    """Like the 2025-08-26 signs purge: years-old tickets closed on one day, spread thinly
+    over communities, so no single community's bulk_close share trips."""
+    ages = [800 + i * 7 for i in range(40)]
+    df = _closed_together(
+        requests_frame, "Tree Concern", ages, ["BELTLINE", "BOWNESS", "HILLHURST"]
+    )
+    results = _results(df)
+    stale = results["stale_bulk_close"]
+    assert not stale.passed
+    assert stale.observed["tickets"] == 40
+    [event] = stale.observed["events"]
+    assert (event["service_name"], event["closed_day"]) == ("Tree Concern", "2025-08-26")
+    assert event["communities"] == 3
+
+
+def test_stale_mask_marks_exactly_the_purged_rows(requests_frame):
+    df = _closed_together(requests_frame, "Tree Concern", [900] * 40, ["BELTLINE"])
+    mask = stale_bulk_close_mask(df, SMALL)
+    assert mask.sum() == 40
+    assert df.loc[mask, "service_request_id"].str.startswith("SR-P").all()
+
+
+def test_routine_auto_close_under_the_age_floor_is_not_flagged(requests_frame):
+    """Like "311 Contact Us" closing batches at ~95 days: a policy, not a cleanup."""
+    df = _closed_together(requests_frame, "Pothole Repair", [95] * 40, ["BELTLINE", "BOWNESS"])
+    assert _results(df)["stale_bulk_close"].passed
+
+
+def test_too_few_stale_tickets_on_one_day_is_not_an_event(requests_frame):
+    df = _closed_together(requests_frame, "Tree Concern", [900] * 10, ["BELTLINE"])
+    assert _results(df)["stale_bulk_close"].passed

@@ -12,8 +12,9 @@ Every check has a severity:
   snapshot, broken dates). The step exits non-zero, so the SageMaker Processing step
   fails and the pipeline stops before any training spend.
 * ``warn`` — the data is usable but something looks like an artifact (a bulk close, a
-  community far off its category's norm). It is recorded in ``validation.json`` next to
-  the run's outputs. ``--strict`` turns warnings into failures.
+  city-wide purge of long-open tickets, a community far off its category's norm). It is
+  recorded in ``validation.json`` next to the run's outputs. ``--strict`` turns warnings
+  into failures.
 
 Checks are plain pandas over the raw frame, with no AWS calls, so they are unit-tested
 on a local fixture (``tests/test_validate.py``) the same way the feature code is.
@@ -83,6 +84,17 @@ class Thresholds:
     # genuine communities (Bowness, 37 days) are nearer 7×.
     group_mean_ratio: float = 10.0
     group_mean_min_excess_days: float = 30.0
+    # City-wide stale bulk close: at least this many tickets of one category closed on one
+    # day, each older than both limits below. The 2025-08-26 traffic-signs purge closed
+    # 3,513 tickets with a median age of 1,085 days (category median: 20); Montgomery's
+    # 2024-10-20 backfill closed 38 pothole tickets from 2021-23.
+    stale_close_min_rows: int = 30
+    stale_close_age_ratio: float = 10.0  # × the category's median days_to_close
+    # 120, not 90: "311 Contact Us" closes batches at 91-98 days old, which looks like an
+    # automatic 90-day close, a policy rather than a cleanup. On the 2026-09-23 pull, 120
+    # drops those (577 -> 0) and keeps every Montgomery and signs-purge ticket: 14,043
+    # tickets flagged (0.48%) in 182 category-days across 60 categories.
+    stale_close_min_age_days: float = 120.0
 
 
 @dataclass
@@ -244,6 +256,74 @@ def check_bulk_close(df: pd.DataFrame, t: Thresholds) -> CheckResult:
     return CheckResult("bulk_close", "warn", not flagged, detail, {"groups": flagged})
 
 
+def stale_bulk_close_mask(df: pd.DataFrame, t: Thresholds | None = None) -> pd.Series:
+    """True for each ticket closed in a stale bulk close: one of at least
+    ``stale_close_min_rows`` tickets of its category closed on the same day, each far
+    older than that category normally takes.
+
+    It's a records cleanup, not service. The breach label of these tickets is probably
+    right (they really were open that long), but their days_to_close is not, so duration
+    statistics and category thresholds should leave them out. The Stage 2 label reuses this
+    mask, so the gate and the label share one definition.
+    """
+    t = t or Thresholds()
+    req = _dates(df["requested_date"])
+    clo = _dates(df["closed_date"])
+    days = (clo - req).dt.total_seconds() / 86_400.0
+    cat_median = days.where(days >= 0).groupby(df["service_name"]).transform("median")
+    limit = (cat_median * t.stale_close_age_ratio).clip(lower=t.stale_close_min_age_days)
+    stale = days >= limit
+    day = clo.dt.floor("D")
+    per_day = stale.groupby([df["service_name"], day]).transform("sum")
+    return (stale & (per_day >= t.stale_close_min_rows)).fillna(False).astype(bool)
+
+
+def check_stale_bulk_close(df: pd.DataFrame, t: Thresholds) -> CheckResult:
+    """City-wide: one day on which many long-open tickets of a category were closed at once."""
+    mask = stale_bulk_close_mask(df, t)
+    flagged = []
+    if mask.any():
+        hit = df.loc[mask]
+        req = _dates(hit["requested_date"])
+        clo = _dates(hit["closed_date"])
+        frame = pd.DataFrame(
+            {
+                "service_name": hit["service_name"],
+                "closed_day": clo.dt.strftime("%Y-%m-%d"),
+                "age": (clo - req).dt.total_seconds() / 86_400.0,
+                "comm_name": hit["comm_name"],
+            }
+        )
+        for (svc, day), grp in frame.groupby(["service_name", "closed_day"], sort=True):
+            flagged.append(
+                {
+                    "service_name": svc,
+                    "closed_day": day,
+                    "tickets": len(grp),
+                    "communities": int(grp["comm_name"].nunique()),
+                    "median_age_days": round(float(grp["age"].median()), 1),
+                }
+            )
+    # Log the biggest events; validation.json keeps every one.
+    biggest = sorted(flagged, key=lambda f: f["tickets"], reverse=True)[:5]
+    detail = "; ".join(
+        f"{f['service_name']} on {f['closed_day']}: {f['tickets']:,} tickets, "
+        f"median age {f['median_age_days']:.0f}d"
+        for f in biggest
+    )
+    if len(flagged) > len(biggest):
+        detail += f"; and {len(flagged) - len(biggest)} smaller events"
+    if flagged:
+        detail = f"{int(mask.sum()):,} tickets in {len(flagged)} events. Largest: {detail}"
+    return CheckResult(
+        "stale_bulk_close",
+        "warn",
+        not flagged,
+        detail or "no stale bulk closes",
+        {"events": flagged, "tickets": int(mask.sum())},
+    )
+
+
 def check_group_outliers(df: pd.DataFrame, t: Thresholds) -> CheckResult:
     """A community far slower than every other community for the same category."""
     g = _closed_groups(df, t)
@@ -295,6 +375,7 @@ def validate(
         check_null_rates(df, t),
         check_dates(df, t, asof),
         check_bulk_close(df, t),
+        check_stale_bulk_close(df, t),
         check_group_outliers(df, t),
     ]
 

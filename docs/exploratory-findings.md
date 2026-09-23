@@ -304,6 +304,10 @@ Each of these feeds a "failures you'll actually hit" section:
    → alias map + restrict to a recent window (Stage 2).
 2. **The Montgomery 196-day pothole outlier** — a per-community average that large is a
    bulk backfill close, not reality. → outlier handling; a Stage 7 anomaly example.
+   *Confirmed on the 2026-09-23 full pull:* 38 tickets from 2021–23 were closed on
+   2024-10-20, and Montgomery's median is 6 days. The same pull shows backlog clearing is
+   routine across the city (for example, 3,505 traffic-sign tickets closed on 2025-08-26).
+   See D-034.
 3. **4 `:@computed_region_*` fields** Socrata attaches (census tract / ward joins) —
    dropped unless a feature needs one, and then only at area level (see
    `docs/data-and-privacy.md`).

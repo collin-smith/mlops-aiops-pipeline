@@ -56,6 +56,20 @@ first real pull (Stage 1), and record what the detectors report there. Nothing n
 sent to CloudWatch, since custom metrics are the budget's largest line; the report goes
 to S3 with the run's outputs. The Stage 3 article covers the gate under "Testing the
 pipeline code" (D-016).
+**Calibration on the first real pull (2026-09-23, 2,911,486 rows):** every structural check
+passed (0 duplicate IDs). `group_outliers` flagged Montgomery / Pothole Maintenance
+(194.5 days against a typical 8.8). The data confirms it was a backfill: 38 tickets from
+2021–23 were closed on 2024-10-20, and Montgomery's median is 6 days. `bulk_close` missed
+Montgomery, because those 38 tickets were only 18% of the community's closures. It did
+catch pieces of a city-wide purge, one community at a time. So a third, city-wide warning
+was added: `stale_bulk_close`. It fires when at least 30 tickets of one category close
+on the same day, each older than both 10× that category's median and 120 days. The
+120-day floor leaves out "311 Contact Us", which closes batches at 91–98 days old: an
+automatic close by policy, not a cleanup. On this pull, the check flags 14,043 tickets
+(0.48%) in 182 events across 60 categories. The largest is 3,505 traffic-sign tickets
+closed on 2025-08-26, at a median age of 1,085 days. Backlog clearing turns out to be
+routine, not rare. `stale_bulk_close_mask()` is exported so the Stage 2 label can use
+the same definition. How to label those rows is still an open Stage 2 decision.
 
 ## D-033 — Every article carries an "MLOps + AIOps on AWS · Part N of 8" subtitle (amends D-022)
 
@@ -270,6 +284,16 @@ storage, depending on service) — worth naming as a conscious tradeoff in the a
 ("chose data-residency alignment over the cheapest region, and it still fit comfortably
 under budget") rather than something a reader discovers unexplained. Latency is a
 non-factor since nothing is served real-time (D-007).
+**Addendum (2026-09-23), why not `ca-west-1` (Calgary):** the original decision compared
+against `us-east-1` only. Checked afterwards against AWS's regional service table, every
+service the pipeline uses (SageMaker AI, Glue, Athena, S3, CloudWatch and Logs, SNS)
+exists in both Canadian regions. Both also satisfy the residency argument above.
+`ca-central-1` stays, for three reasons. It has the wider catalogue (184 services to
+`ca-west-1`'s 133), which leaves room for backlog items. The SageMaker quota cases and the
+applied stack were already there. And being physically in Calgary gains a batch pipeline
+nothing. That table lists services, not features: SageMaker feature- and instance-level
+availability in `ca-west-1` (Pipelines, Model Monitor, spot `ml.m5.large`) was not checked,
+so this isn't a claim that Calgary couldn't run the pipeline.
 
 ## D-022 — Story-forward article headlines
 
