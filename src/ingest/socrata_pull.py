@@ -7,7 +7,7 @@ Subcommands
   communities  pull the community lookup (comm_code -> sector, srg) for the fairness check
   to-parquet   convert the local NDJSON into partitioned Parquet (year=/month=)
   snapshot     upload the local raw + processed data to S3 under asof=<date>/
-  replay       download a previously-frozen S3 snapshot back to local (no API call)
+  replay       download a frozen raw snapshot from S3 and rebuild processed/ from it (no API call)
 
 The Socrata trap this stage teaches: a naive ``GET .../iahh-g8bj.json`` returns only
 1,000 rows and gives you no error. You page. Offset paging (``$offset``) also has a
@@ -22,6 +22,7 @@ import gzip
 import json
 import logging
 import random
+import shutil
 import sys
 import time
 from datetime import UTC, datetime
@@ -193,8 +194,15 @@ def cmd_to_parquet(args: argparse.Namespace) -> None:
     if not files:
         sys.exit(f"no NDJSON under {raw_dir} — run `pull` first")
 
+    # processed/311 holds exactly one snapshot, the latest. write_to_dataset names each file
+    # with a fresh uuid, so writing over an older build would add a second copy of every
+    # month instead of replacing it. History lives in raw/311/asof=<date>/, and `replay`
+    # rebuilds processed/ from any of those.
     out_root = DATA_ROOT / "processed" / "311"
-    out_root.mkdir(parents=True, exist_ok=True)
+    if out_root.exists():
+        log.info("replacing %s (built from an earlier snapshot)", out_root)
+        shutil.rmtree(out_root)
+    out_root.mkdir(parents=True)
 
     total = 0
     for f in files:
@@ -272,12 +280,39 @@ def cmd_snapshot(args: argparse.Namespace) -> None:
         if not local_dir.exists():
             log.warning("skip %s (does not exist)", local_dir)
             continue
+        uploaded = set()
         for path in local_dir.rglob("*"):
             if path.is_file():
                 key = f"{key_prefix}/{path.relative_to(local_dir).as_posix()}"
                 s3.upload_file(str(path), cfg.bucket, key)
+                uploaded.add(key)
                 log.info("s3://%s/%s", cfg.bucket, key)
+        if key_prefix == "processed/311":
+            # Mirror, don't accumulate: an older build's files would double-count every month.
+            _delete_keys(
+                s3, cfg.bucket, stale_keys(_list_keys(s3, cfg.bucket, key_prefix), uploaded)
+            )
     log.info("snapshot asof=%s uploaded to s3://%s", asof, cfg.bucket)
+
+
+def _list_keys(s3, bucket: str, prefix: str) -> list[str]:
+    keys = []
+    for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=f"{prefix}/"):
+        keys.extend(obj["Key"] for obj in page.get("Contents", []))
+    return keys
+
+
+def stale_keys(remote: list[str], uploaded: set[str]) -> list[str]:
+    """Keys under a mirrored prefix that the upload just now didn't write."""
+    return sorted(k for k in remote if k not in uploaded)
+
+
+def _delete_keys(s3, bucket: str, keys: list[str]) -> None:
+    for i in range(0, len(keys), 1000):  # the DeleteObjects limit
+        batch = [{"Key": k} for k in keys[i : i + 1000]]
+        s3.delete_objects(Bucket=bucket, Delete={"Objects": batch, "Quiet": True})
+    if keys:
+        log.info("removed %d stale object(s) from an earlier build", len(keys))
 
 
 def cmd_replay(args: argparse.Namespace) -> None:
@@ -290,7 +325,6 @@ def cmd_replay(args: argparse.Namespace) -> None:
     for key_prefix, local_root in (
         (f"raw/311/asof={asof}", DATA_ROOT / "raw" / "311" / f"asof={asof}"),
         (f"raw/communities/asof={asof}", DATA_ROOT / "raw" / "communities" / f"asof={asof}"),
-        ("processed/311", DATA_ROOT / "processed" / "311"),
     ):
         paginator = s3.get_paginator("list_objects_v2")
         for page in paginator.paginate(Bucket=cfg.bucket, Prefix=key_prefix):
@@ -300,6 +334,9 @@ def cmd_replay(args: argparse.Namespace) -> None:
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 s3.download_file(cfg.bucket, obj["Key"], str(dest))
                 log.info("<- s3://%s/%s", cfg.bucket, obj["Key"])
+    # processed/ in S3 only ever holds the latest build, so rebuild this date's from its raw
+    # files instead of downloading it.
+    cmd_to_parquet(argparse.Namespace(asof=asof))
     log.info("replayed snapshot asof=%s from s3://%s", asof, cfg.bucket)
 
 

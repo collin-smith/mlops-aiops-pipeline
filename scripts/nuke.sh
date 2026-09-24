@@ -34,6 +34,22 @@ sm() { aws sagemaker "$@" --region "$REGION" --output text; }
 
 ((CHECK)) && echo "CHECK MODE: reporting only, nothing will be changed."
 
+# Fail early and clearly, rather than halfway through with a raw API error. The usual cause
+# on WSL is clock drift after Windows sleeps: most AWS APIs reject a request signed more
+# than 5 minutes off.
+if ! err=$(aws sts get-caller-identity --region "$REGION" --output text 2>&1 >/dev/null); then
+  echo
+  if [[ "$err" == *"Signature expired"* || "$err" == *"SignatureDoesNotMatch"* ]]; then
+    echo "!! The local clock is off, so AWS rejects the request. Fix it, then re-run:"
+    echo "     sudo ntpdate time.windows.com"
+  else
+    echo "!! Can't reach AWS with the current credentials (is AWS_PROFILE set?):"
+    echo "   $err"
+  fi
+  echo "NOT CHECKED: nothing was inspected or changed."
+  exit 2
+fi
+
 say "SageMaker endpoints (there should be NONE; the Stage 6 serverless demo deletes its own)"
 items=$(sm list-endpoints --query 'Endpoints[].EndpointName')
 for e in $items; do found "endpoint $e" sm delete-endpoint --endpoint-name "$e"; done

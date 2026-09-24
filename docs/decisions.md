@@ -5,6 +5,24 @@ ADR-lite. Newest first. Seeded from the planning docs
 
 ---
 
+## D-036 — `processed/311` holds one snapshot; history lives in `raw/`
+
+**Status:** Accepted (2026-09-24). `to-parquet` clears `processed/311` before rebuilding it.
+`snapshot` mirrors it to S3, deleting objects the upload didn't write, while `raw/311/asof=…/`
+is only ever added to. `replay --asof <date>` downloads that date's raw files and rebuilds
+`processed/` from them locally. It no longer downloads `processed/`, which would be the
+latest build rather than that date's.
+**Why:** `pyarrow.write_to_dataset` gives every file a fresh uuid name, and the upload never
+deleted anything. So the first re-pull (Stage 5's "retrain on new data") would have left
+two copies of every month, and Athena and training would have counted everything twice.
+The validation gate's duplicate-ID check would have failed it, but the fix belongs at the
+source. Found on 2026-09-23 while checking whether "data lake" was an honest description;
+the one snapshot so far was unaffected (the counts matched exactly).
+**How to apply:** the crawler and Athena always see the latest snapshot. To reproduce an
+older run, `replay` it, then query locally or snapshot it back. The datalake bucket is
+versioned, so a deleted processed object can be recovered for 30 days (noncurrent-version
+expiry). Tested in `tests/test_socrata_pull.py` with a fake S3.
+
 ## D-035 — The promotion gate includes a fairness check across City sectors
 
 **Status:** Accepted (2026-09-23). `src/promote/fairness.py` scores the evaluation
