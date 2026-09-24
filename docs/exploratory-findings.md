@@ -8,7 +8,8 @@ classification target is actually learnable, (c) Calgary 311 is the right datase
 
 **Verdict:** all three hold. The civic story is strong and interpretable. Breach risk is
 **modestly** predictable at intake — good enough for a triage use case (2.8× lift in the
-top decile), not good enough to claim high accuracy. That is a legitimate result to
+top decile on this sample), not good enough to claim high accuracy. *Update 2026-09-24:
+on the full 2.9M-row pull, the Stage 2 baseline reaches **2.0×** (D-037).* That is a legitimate result to
 publish either way. Proceed with Calgary 311 + binary classification.
 
 > Repro: `python scripts/explore_311.py` (queries) — numbers below are from
@@ -129,7 +130,7 @@ the others are context.
 
 | What they'd pull from this | |
 |---|---|
-| **Predictive triage at intake** — the model's top-decile flag catches ~77% eventual breaches vs a 28% base rate (2.8× lift). Enough to route or escalate a small daily shortlist proactively. | The concrete product. |
+| **Predictive triage at intake** — 77% of the requests in the model's top-decile flag breach, vs a 28% base rate (2.8× lift on this sample; 2.0× on the full data, D-037). Enough to route or escalate a small daily shortlist proactively. | The concrete product. |
 | **Capacity planning** — category-mix swings 2× across the year and by category up to ~6,600× (snow/ice Jan→Jul). Staffing to an annual average guarantees a winter and a summer crunch. | |
 | **Backlog as an early-warning signal** — the 30-day category backlog is one of the few features that carries predictive weight; worth a dashboard even without the model. | |
 | **Data-quality debt** — ~26k duplicates, category-name drift across back-end systems, one community with an obvious bulk-close artifact. Cleanup has ROI before any ML. | |
@@ -271,7 +272,7 @@ Threshold computed on train only. Features: `service_name`, `agency_responsible`
 
 | If the team reviews the model's… | …share that actually breach | Lift vs base |
 |---|---|---|
-| top 10% flagged | **77%** | **2.8×** |
+| top 10% flagged | **77%** | **2.8×** (full data: 35% / 2.0×, D-037) |
 | top 25% flagged | 49% | 1.8× |
 
 **Interpretation:**
@@ -328,9 +329,9 @@ Each of these feeds a "failures you'll actually hit" section:
 | Per-category threshold | **Essential** — keep as designed |
 | Stage 2 model | XGBoost (tree, for interactions), `scale_pos_weight`, report **PR-AUC** not just ROC |
 | Stage 2 features | add holiday-week, community density; the linear-vs-tree gap says don't bother tuning a linear baseline hard |
-| Stage 2 preprocessing | alias map for `service_name`; cap to top ~30 categories + "Other" |
+| Stage 2 preprocessing | alias map for `service_name`; cap to top ~30 categories + "Other" *(alias map dropped on the full data: D-037)* |
 | Stage 7 drift vectors | seasonal category mix, community mix, taxonomy drift — all real |
-| Stage 8 framing | lead with top-decile lift (2.8×); be honest that overall accuracy is modest |
+| Stage 8 framing | lead with top-decile lift (2.8× here, 2.0× on the full data, D-037); be honest that overall accuracy is modest |
 
 ---
 

@@ -93,3 +93,100 @@ def test_mixed_iso_timestamp_formats_all_parse():
         }
     )
     assert add_days_to_close(df)["days_to_close"].notna().all()
+
+
+def _with_purge(df: pd.DataFrame, n: int = 40) -> pd.DataFrame:
+    """A backlog purge: ``n`` long-open Tree Concern tickets all closed on one day."""
+    day = pd.Timestamp("2024-06-01", tz="UTC")
+    rows = [
+        {
+            **df.iloc[0].to_dict(),
+            "service_request_id": f"SR-P{i:04d}",
+            "requested_date": (day - pd.Timedelta(days=900 + i)).isoformat(),
+            "closed_date": day.isoformat(),
+            "status_description": "Closed",
+            "service_name": "Tree Concern",
+        }
+        for i in range(n)
+    ]
+    return pd.concat([df, pd.DataFrame(rows)], ignore_index=True)
+
+
+def _purged_ids(frame: pd.DataFrame) -> pd.Series:
+    return frame["service_request_id"].str.startswith("SR-P")
+
+
+def test_flag_keeps_purged_rows_labelled_but_out_of_the_threshold(requests_frame):
+    df = _with_purge(requests_frame)
+    train, _, thr = build_training_labels(df, purge_handling="flag")
+    purged = train.loc[_purged_ids(train)]
+    assert len(purged) == 40
+    assert purged["purge_closed"].all()
+    assert (purged["breach"] == 1).all()  # they really were open that long
+    # the threshold matches a build that never saw the purge
+    _, _, clean_thr = build_training_labels(requests_frame, purge_handling="flag")
+    assert thr["Tree Concern"] == pytest.approx(clean_thr["Tree Concern"])
+
+
+def test_keep_lets_the_purge_inflate_the_threshold(requests_frame):
+    df = _with_purge(requests_frame)
+    _, _, kept = build_training_labels(df, purge_handling="keep")
+    _, _, flagged = build_training_labels(df, purge_handling="flag")
+    assert kept["Tree Concern"] > flagged["Tree Concern"]
+
+
+def test_exclude_drops_purged_rows(requests_frame):
+    train, test, _ = build_training_labels(_with_purge(requests_frame), purge_handling="exclude")
+    assert not _purged_ids(train).any() and not _purged_ids(test).any()
+
+
+def test_purge_flag_counts_as_a_leaky_column(requests_frame):
+    train, _, _ = build_training_labels(requests_frame)
+    with pytest.raises(LeakageError, match="purge_closed"):
+        assert_no_leakage(train[["service_name", "purge_closed"]])
+
+
+def test_unknown_purge_handling_is_rejected(requests_frame):
+    with pytest.raises(ValueError, match="purge_handling"):
+        build_training_labels(requests_frame, purge_handling="ignore")
+
+
+def _with_open(df: pd.DataFrame, ages_days: list[int]) -> pd.DataFrame:
+    """Open Pothole Repair requests of the given ages at the snapshot."""
+    newest = pd.to_datetime(df["requested_date"], utc=True).max()
+    rows = [
+        {
+            **df.iloc[0].to_dict(),
+            "service_request_id": f"SR-O{i:04d}",
+            "requested_date": (newest - pd.Timedelta(days=age)).isoformat(),
+            "closed_date": None,
+            "status_description": "Open",
+            "service_name": "Pothole Repair",
+        }
+        for i, age in enumerate(ages_days)
+    ]
+    return pd.concat([df, pd.DataFrame(rows)], ignore_index=True)
+
+
+def test_open_request_past_its_threshold_is_a_certain_breach(requests_frame):
+    # potholes close in ~3 days here, so 60 days open is certainly late; 0 days is unknown
+    df = _with_open(requests_frame, [60, 60, 0, 0])
+    _, test, thr = build_training_labels(df)
+    opened = test.loc[test["service_request_id"].str.startswith("SR-O")]
+    assert len(opened) == 2  # the two still inside their threshold have no label yet
+    assert (opened["breach"] == 1).all() and opened["censored"].all()
+    assert opened["days_to_close"].isna().all()
+    assert thr["Pothole Repair"] < 60
+
+
+def test_overdue_open_can_be_turned_off(requests_frame):
+    df = _with_open(requests_frame, [60, 60])
+    _, test, _ = build_training_labels(df, include_overdue_open=False)
+    assert not test["service_request_id"].str.startswith("SR-O").any()
+    assert not test["censored"].any()
+
+
+def test_censored_counts_as_a_leaky_column(requests_frame):
+    train, _, _ = build_training_labels(requests_frame)
+    with pytest.raises(LeakageError, match="censored"):
+        assert_no_leakage(train[["service_name", "censored"]])

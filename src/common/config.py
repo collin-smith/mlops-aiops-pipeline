@@ -18,6 +18,11 @@ from functools import lru_cache
 TRAIN_WINDOW_YEARS = int(os.environ.get("MLOPS_TRAIN_WINDOW_YEARS", "5"))
 BREACH_PERCENTILE = float(os.environ.get("MLOPS_BREACH_PERCENTILE", "0.75"))
 HOLDOUT_YEARS = int(os.environ.get("MLOPS_HOLDOUT_YEARS", "1"))
+# Tickets closed in a stale bulk close (a backlog purge; see src.pipeline.validate):
+#   "flag"    keep the breach label, but leave them out of the per-category thresholds
+#   "exclude" drop them from training and evaluation
+#   "keep"    treat them like any other closed ticket
+PURGE_HANDLING = os.environ.get("MLOPS_PURGE_HANDLING", "flag")
 
 # Columns that reveal the outcome. These must never reach the model. The leakage
 # guard in ``src.features.build_labels`` asserts against this list.
@@ -27,6 +32,8 @@ LEAKY_COLUMNS: tuple[str, ...] = (
     "status_description",
     "days_to_close",
     "breach",
+    "purge_closed",  # derived from closed_date
+    "censored",  # "still open at the snapshot", i.e. derived from closed_date
 )
 
 # Columns known at intake — the only inputs the model is allowed to see.

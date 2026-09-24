@@ -15,6 +15,7 @@ PROJECT="${MLOPS_PROJECT:-mlops-aiops}"
 CHECK=0
 [[ "${1:-}" == "--check" ]] && CHECK=1
 FOUND=0
+OTHER=0 # account items outside this project: reported, never deleted
 
 say() { printf '\n=== %s ===\n' "$1"; }
 # found <description> <command...>: report the item; outside --check, also run the command.
@@ -133,6 +134,47 @@ else
   echo "crawler ${state,,} — good"
 fi
 
+say "Anything else in the account that bills while idle, all regions (report only)"
+# The $25 hard stop counts ALL account spend (D-031), so leftovers from other work count too:
+# an EKS cluster is ~$2.40/day idle, a NAT gateway ~$1/day, and deleting a cluster often
+# leaves its disks, snapshots and IPs behind. This section never deletes anything; those
+# aren't this project's to remove. Skip it with ACCOUNT_SWEEP=0 (it takes about a minute).
+if [[ "${ACCOUNT_SWEEP:-1}" == "1" ]]; then
+  n=0
+  for r in $(aws ec2 describe-regions --query 'Regions[].RegionName' --output text); do
+    while IFS= read -r line; do
+      [[ -z "${line// /}" || "$line" == *": " || "$line" == *": None" ]] && continue
+      n=$((n + 1))
+      FOUND=$((FOUND + 1))
+      OTHER=$((OTHER + 1))
+      echo "!! $r $line"
+    done < <({
+      aws eks list-clusters --region "$r" --query 'clusters[]' --output text | sed 's/^/eks cluster: /'
+      aws ec2 describe-instances --region "$r" \
+        --filters Name=instance-state-name,Values=pending,running,stopped \
+        --query 'Reservations[].Instances[].[InstanceId,InstanceType,State.Name]' --output text |
+        sed 's/^/ec2 instance: /'
+      aws ec2 describe-volumes --region "$r" --query 'Volumes[].[VolumeId,Size,State]' \
+        --output text | sed 's/^/ebs volume: /'
+      aws ec2 describe-snapshots --owner-ids self --region "$r" \
+        --query 'Snapshots[].[SnapshotId,VolumeSize]' --output text | sed 's/^/ebs snapshot: /'
+      aws ec2 describe-nat-gateways --region "$r" --filter Name=state,Values=available \
+        --query 'NatGateways[].NatGatewayId' --output text | sed 's/^/nat gateway: /'
+      aws elbv2 describe-load-balancers --region "$r" --query 'LoadBalancers[].LoadBalancerName' \
+        --output text | sed 's/^/load balancer: /'
+      aws ec2 describe-addresses --region "$r" --query 'Addresses[].PublicIp' --output text |
+        sed 's/^/elastic ip: /'
+    } 2>/dev/null)
+  done
+  if ((n == 0)); then
+    echo "none — good"
+  else
+    echo "   Not this project's: nuke.sh won't delete these. Review them and remove what you don't need."
+  fi
+else
+  echo "skipped (ACCOUNT_SWEEP=0)"
+fi
+
 say "GitHub Actions retrain schedule (outside AWS; runs even while you're paused)"
 wf="$(dirname "$0")/../.github/workflows/retrain.yml"
 if [[ -f "$wf" ]] && grep -qE '^[[:space:]]+schedule:' "$wf"; then
@@ -166,12 +208,15 @@ echo "(Cost Explorer lags up to ~24 h, and each query costs \$0.01: run --check 
 echo
 if ((CHECK)); then
   if ((FOUND)); then
-    echo "NOT CLEAN: $FOUND item(s) still billing or scheduled. Run ./scripts/nuke.sh to fix."
+    echo "NOT CLEAN: $FOUND item(s) still billing or scheduled."
+    (((FOUND - OTHER) > 0)) && echo "  $((FOUND - OTHER)) from this project: run ./scripts/nuke.sh to fix them."
+    ((OTHER > 0)) && echo "  $OTHER elsewhere in the account: review and remove them yourself (listed above)."
     exit 1
   fi
   echo "CLEAN: nothing billing while idle. Safe to pause."
 else
-  echo "done ($FOUND item(s) fixed). Confirm with: ./scripts/nuke.sh --check"
+  echo "done ($((FOUND - OTHER)) item(s) fixed). Confirm with: ./scripts/nuke.sh --check"
+  ((OTHER > 0)) && echo "$OTHER item(s) elsewhere in the account were NOT touched: review them (listed above)."
   echo "Custom CloudWatch metrics can't be deleted but stop billing once you stop emitting."
   echo "Full teardown when the series ends:  terraform -chdir=infra destroy"
 fi

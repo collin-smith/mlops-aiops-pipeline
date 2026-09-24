@@ -5,6 +5,33 @@ ADR-lite. Newest first. Seeded from the planning docs
 
 ---
 
+## D-037 — Labels handle censoring; the full-data baseline is 2.0× lift, not 2.8×
+
+**Status:** Accepted (2026-09-24). Two changes to `build_labels.py`, and the first honest
+baseline number.
+1. **Right-censoring.** An open request already older than its category's threshold is a
+   certain breach, so it's labelled 1 (`censored` = True, `days_to_close` NaN). An open
+   request still inside its threshold has no label yet and is left out. Previously every
+   open request was dropped, which biased the most recent months towards fast closes:
+   the test year's breach rate read 15.8%, falling to 8.3% for the newest month, and
+   13,378 certain breaches were discarded. With them included, it's 18.1%.
+2. **Backlog purges** (`purge_handling`, default `"flag"`). Tickets flagged by
+   `stale_bulk_close_mask` (D-034) keep their breach label, but don't count towards the
+   per-category thresholds. `"exclude"` and `"keep"` remain available.
+`censored` and `purge_closed` are both in `LEAKY_COLUMNS`.
+**Result:** a local XGBoost baseline on the full 2026-09-23 pull (train 2021-01 to
+2025-09, test the most recent year; intake-time features only) gives **ROC-AUC 0.66,
+PR-AUC 0.32 against an 18% base rate, and top-decile precision 35%: a 2.0× lift**. It
+catches 20% of all breaches in the top 10%. `"flag"` and `"exclude"` differ by 0.04× of lift.
+**Why it matters:** the exploratory pass's 2.8× (a 230k-row sample, a different split, a
+28% base rate) didn't reproduce, and the series was going to lead with it. The Stage 2
+subtitle and the Stage 8 framing now use the real figure. It's still a legitimate triage
+result, and it leaves the Stage 5 challenger a real baseline to beat.
+**Also decided:** no `service_name` alias map. Only 3.1% of test-year requests fall in
+categories unseen in training, mostly new categories rather than renames, and an
+automatic cross-department match merged unrelated requests. Unseen categories fall back
+to the city-wide threshold, and the unseen share becomes a Stage 7 drift signal.
+
 ## D-036 — `processed/311` holds one snapshot; history lives in `raw/`
 
 **Status:** Accepted (2026-09-24). `to-parquet` clears `processed/311` before rebuilding it.
@@ -99,8 +126,9 @@ Stage 7's headline said "AIOps", and none said "MLOps". Those are the terms read
 for and what the series is about. The subtitle adds them to every article without making
 the long headlines longer, and the "Part N of 8" makes the series order clear.
 **How to apply:** new or redrafted articles keep the `subtitle:` line. Every claim in a
-subtitle must match what the article actually covers. Stage 2's "2.8× lift" comes from
-the exploratory run and gets re-checked once the Stage 2 model is trained. The subtitle
+subtitle must match what the article actually covers. Stage 2's "2.8× lift" came from
+the exploratory run; re-checked on the full data on 2026-09-24, it's 2.0× (D-037), and the
+Stage 2 subtitle now says "twice the normal rate". The subtitle
 goes in Medium's subtitle field, and the LinkedIn post uses the same series tag.
 
 ## D-032 — Terraform state lives in S3, in a bucket created outside the stack
@@ -501,8 +529,8 @@ open requests) and gives Stage 8 a concrete product. It is a **proxy** threshold
 City-published SLA — every article says so.
 **Exploratory check (2026-09-09, `docs/exploratory-findings.md`):** label behaves as
 designed (~22% breach rate); signal is **modest** — a tree model reaches ~0.69 ROC-AUC /
-0.54 PR-AUC on a temporal split, 2.8× lift in the top decile. Triage-grade, not
-high-accuracy. A weak final result is still publishable.
+0.54 PR-AUC on a temporal split, 2.8× lift in the top decile (a 230k-row sample; the
+full-data baseline is 2.0×, D-037). Triage-grade, not high-accuracy. A weak final result is still publishable.
 
 ## D-007 — Deploy target: Batch Transform only, no always-on endpoint
 
