@@ -22,6 +22,7 @@ aws ce get-cost-and-usage --region us-east-1 \
 |---|---|---|---|---|---|
 | 2026-09-09 | planning + scaffold | repo scaffold, code, Terraform written. **No AWS resources applied yet.** | $0.00 | $0.00 | Build not started on AWS. |
 | 2026-09-09 | exploratory data pass | aggregate SoQL queries + ~230k-row sample from the public Socrata API; local separability check. See `docs/exploratory-findings.md`. | $0.00 | $0.00 | Public open data, no auth, no AWS. |
+| 2026-09-23 | Stage 1 build | Terraform base stack applied (33 resources, three applies: clock skew, then the existing anomaly monitor), 2,911,486-row pull (local), Parquet (local), 147 MB snapshot to S3, 2 crawler runs (the second after the `table_prefix` fix), 3 Athena queries (≈12 MB scanned, 30 MB billed), 4 Cost Explorer queries. | ≈ $0.35 (2 crawls ≈ $0.30 at the 10-min minimum; Cost Explorer $0.04; S3 and Athena < $0.01) | $0.00 at end of session | Cost Explorer lags ~24 h: replace with the next day's `nuke.sh --check`. `nuke.sh --check` CLEAN. |
 
 ## Budget by stage (from `output/04-cost-and-serverless.md`)
 

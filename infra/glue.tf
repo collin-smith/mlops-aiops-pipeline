@@ -49,6 +49,9 @@ resource "aws_glue_crawler" "processed_311" {
   role          = aws_iam_role.glue.arn
   database_name = aws_glue_catalog_database.main.name
   description   = "Catalogs processed/311 partitioned Parquet. Run on demand; no schedule."
+  # Glue names the table after the leaf folder, so without a prefix the table is `311`.
+  # A name starting with a digit must be double-quoted in every Athena query.
+  table_prefix = "processed_"
 
   s3_target {
     path = "s3://${aws_s3_bucket.datalake.bucket}/processed/311/"

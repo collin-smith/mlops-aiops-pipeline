@@ -126,13 +126,16 @@ else
   echo "no active schedule — good"
 fi
 
+# Cost Explorer sums floats, so $0 can come back as -1e-09. Print dollars and cents.
+usd() { awk '{ v = $1 + 0; if (v < 0.005 && v > -0.005) v = 0; printf "$%.2f\n", v }'; }
+
 say "Spend: account-wide since the series start (what the \$25 hard stop counts)"
 series_start="${MLOPS_SERIES_START:-2026-09-01}"
 aws ce get-cost-and-usage --region us-east-1 \
   --time-period "Start=${series_start},End=$(date -u -d tomorrow +%Y-%m-%d)" \
   --granularity MONTHLY --metrics UnblendedCost \
   --query 'sum(ResultsByTime[].to_number(Total.UnblendedCost.Amount))' --output text 2>/dev/null \
-  || echo "(cost explorer not queryable yet — check the console)"
+  | usd || echo "(cost explorer not queryable yet — check the console)"
 
 say "Month-to-date spend tagged project=${PROJECT} (blind until the tag is activated)"
 start=$(date -u +%Y-%m-01)
@@ -141,7 +144,8 @@ aws ce get-cost-and-usage --region us-east-1 \
   --granularity MONTHLY --metrics UnblendedCost \
   --filter "{\"Tags\":{\"Key\":\"project\",\"Values\":[\"${PROJECT}\"]}}" \
   --query 'ResultsByTime[0].Total.UnblendedCost.Amount' --output text 2>/dev/null \
-  || echo "(cost explorer not queryable yet — check the console)"
+  | usd || echo "(cost explorer not queryable yet — check the console)"
+echo "(Cost Explorer lags up to ~24 h, and each query costs \$0.01: run --check before a pause, not in a loop.)"
 
 echo
 if ((CHECK)); then
