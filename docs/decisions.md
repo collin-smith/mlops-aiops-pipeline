@@ -5,6 +5,36 @@ ADR-lite. Newest first. Seeded from the planning docs
 
 ---
 
+## D-038 — The $25 stop counts this project's tagged usage before credits; the account gets a $15/$30 safety net (amends D-031)
+
+**Status:** Accepted (2026-09-24, Collin: "option B, $15/$30, ignore credits").
+- `…-series-total` keeps the $15 warning and the $25 deny action. It now counts only spend
+  tagged `project=mlops-aiops`, before Free Tier credits.
+- `…-account-monthly` becomes the account-wide safety net: emails at $15 and $30 of
+  monthly ACTUAL spend, and at the $10 FORECAST. It counts usage before credits and has
+  no action.
+- `nuke.sh` reports all three figures: this project, the whole account, and the net
+  after credits.
+**Why:**
+1. **Credits hid all spend.** The account is on the AWS Free plan, where each charge is
+   offset by an equal credit, and budgets count net of credits by default. So every
+   budget read $0.00 while the account had used $3.83 (2026-09-01 to 09-24), and the $25
+   stop could only fire after $133 of credits were gone.
+2. **The account isn't dedicated any more.** D-031's premise ("dedicated, apart from a
+   near-$0 static site") no longer holds. StudySite will share the account, and about
+   $3.58 of the $3.83 was an earlier EKS and Bedrock experiment. An account-wide stop
+   would let other work use up this series' $25, and it can't halt that other work anyway,
+   since the deny only touches this project's roles.
+**The trade-off D-031 worried about:** a tag filter can't see untaggable costs (CloudWatch
+custom metrics, Cost Explorer queries, data transfer) or anything left untagged. The
+account-wide $15/$30 alerts and the anomaly monitor cover that gap. The `project` tag was
+activated on 2026-09-23, and Python-launched jobs pass `aws_tags()`. StudySite keeps only a
+tag-filtered budget of its own (`output/shared-account-cost-guide.md`), so this project
+owns the one account-wide budget and the anomaly subscription.
+**Upgrading to the Paid plan** keeps the remaining credits (unless the upgrade happens by
+joining AWS Organizations, which expires them). It's worth doing before Stage 2's first
+SageMaker job; Collin decides when.
+
 ## D-037 — Labels handle censoring; the full-data baseline is 2.0× lift, not 2.8×
 
 **Status:** Accepted (2026-09-24). Two changes to `build_labels.py`, and the first honest
@@ -146,7 +176,7 @@ means `destroy` can't delete the state it's reading. Costs cents.
 `terraform init -backend=false` and never touches state. The bucket is the last thing
 deleted at the end of the series, after `destroy` succeeds (Stage 8 teardown).
 
-## D-031 — The $25 hard stop counts all account spend since the series start (amends D-011)
+## D-031 — The $25 hard stop counts all account spend since the series start (amends D-011; scope narrowed by D-038)
 
 **Status:** Accepted (2026-09-22). The hard stop moves from a tag-filtered monthly budget
 to an **account-wide budget that accumulates from `series_start`** (`…-series-total`,

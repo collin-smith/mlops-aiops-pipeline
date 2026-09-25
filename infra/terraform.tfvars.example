@@ -9,5 +9,7 @@ github_repo   = "collin-smith/mlops-aiops-pipeline"
 budget_warn_usd        = 15
 budget_hardstop_usd    = 25
 budget_forecast_warn_usd = 10
+account_warn_usd         = 15
+account_alert_usd        = 30
 series_start           = "2026-09-01_00:00" # first of the month the build starts
 enable_budget_hardstop = true

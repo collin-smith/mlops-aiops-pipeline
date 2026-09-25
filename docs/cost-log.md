@@ -1,7 +1,8 @@
 # Cost log
 
 Running AWS spend receipt for the series. Updated at the end of every build session.
-Screenshotted into the Stage 6 article. Target: ~$8 expected, **$25 hard cap** (enforced
+Screenshotted into the Stage 6 article. Target: ~$8 expected, **$25 hard cap** on this project's
+tagged spend before credits, plus a $15/$30 account-wide safety net (D-038; enforced
 by the Budgets action — see `infra/budgets.tf`).
 
 How to check month-to-date:

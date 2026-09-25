@@ -20,8 +20,9 @@ diagram each, "failures you'll actually hit" framing. Written up outside this re
   Serverless Inference demo in Stage 6 (`scripts/serverless_demo.py`) measures real-time
   latency and cost for comparison, then deletes itself. `ci.yml` fails the build if
   endpoint-creation code appears anywhere else.
-- **Cost:** ~$8 expected, **$25 hard cap on cumulative, account-wide spend**, enforced by
-  an AWS Budgets action that attaches a deny policy to the pipeline roles. All compute is job-based / ephemeral.
+- **Cost:** ~$8 expected, **$25 hard cap on this project's cumulative spend** (tagged,
+  before Free Tier credits), enforced by an AWS Budgets action that attaches a deny policy
+  to the pipeline roles, plus an account-wide safety net that emails at $15 and $30 a month. All compute is job-based / ephemeral.
 
 ## Series index
 

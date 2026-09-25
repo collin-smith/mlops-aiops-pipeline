@@ -187,22 +187,29 @@ fi
 # Cost Explorer sums floats, so $0 can come back as -1e-09. Print dollars and cents.
 usd() { awk '{ v = $1 + 0; if (v < 0.005 && v > -0.005) v = 0; printf "$%.2f\n", v }'; }
 
-say "Spend: account-wide since the series start (what the \$25 hard stop counts)"
+say "Spend since the series start, before Free Tier credits"
+# Two Cost Explorer queries ($0.01 each). The account is on the Free plan, where usage is
+# offset by an equal credit, so the net figure alone would read $0.00 (D-038).
 series_start="${MLOPS_SERIES_START:-2026-09-01}"
-aws ce get-cost-and-usage --region us-east-1 \
-  --time-period "Start=${series_start},End=$(date -u -d tomorrow +%Y-%m-%d)" \
-  --granularity MONTHLY --metrics UnblendedCost \
-  --query 'sum(ResultsByTime[].to_number(Total.UnblendedCost.Amount))' --output text 2>/dev/null \
-  | usd || echo "(cost explorer not queryable yet — check the console)"
-
-say "Month-to-date spend tagged project=${PROJECT} (blind until the tag is activated)"
-start=$(date -u +%Y-%m-01)
-aws ce get-cost-and-usage --region us-east-1 \
-  --time-period "Start=${start},End=$(date -u -d tomorrow +%Y-%m-%d)" \
-  --granularity MONTHLY --metrics UnblendedCost \
-  --filter "{\"Tags\":{\"Key\":\"project\",\"Values\":[\"${PROJECT}\"]}}" \
-  --query 'ResultsByTime[0].Total.UnblendedCost.Amount' --output text 2>/dev/null \
-  | usd || echo "(cost explorer not queryable yet — check the console)"
+period="Start=${series_start},End=$(date -u -d tomorrow +%Y-%m-%d)"
+if acct=$(aws ce get-cost-and-usage --region us-east-1 --time-period "$period" \
+  --granularity MONTHLY --metrics UnblendedCost --group-by Type=DIMENSION,Key=RECORD_TYPE \
+  --query 'ResultsByTime[].Groups[].[Keys[0],Metrics.UnblendedCost.Amount]' \
+  --output text 2>/dev/null) &&
+  proj=$(aws ce get-cost-and-usage --region us-east-1 --time-period "$period" \
+    --granularity MONTHLY --metrics UnblendedCost \
+    --filter "{\"And\":[{\"Tags\":{\"Key\":\"project\",\"Values\":[\"${PROJECT}\"]}},{\"Dimensions\":{\"Key\":\"RECORD_TYPE\",\"Values\":[\"Usage\"]}}]}" \
+    --query 'sum(ResultsByTime[].to_number(Total.UnblendedCost.Amount))' \
+    --output text 2>/dev/null); then
+  usage=$(awk -F'\t' '$1 == "Usage" { s += $2 } END { print s + 0 }' <<<"$acct")
+  net=$(awk -F'\t' '{ s += $NF } END { print s + 0 }' <<<"$acct")
+  row() { printf '  %-40s %8s   <- %s\n' "$1" "$2" "$3"; }
+  row "this project (tag project=${PROJECT})" "$(usd <<<"$proj")" "the \$15 warning and \$25 hard stop"
+  row "whole account" "$(usd <<<"$usage")" "the \$15 / \$30 monthly safety net"
+  row "whole account after credits" "$(usd <<<"$net")" "what is actually billed"
+else
+  echo "(cost explorer not queryable yet — check the console)"
+fi
 echo "(Cost Explorer lags up to ~24 h, and each query costs \$0.01: run --check before a pause, not in a loop.)"
 
 echo

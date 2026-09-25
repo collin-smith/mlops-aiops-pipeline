@@ -26,15 +26,27 @@ variable "github_repo" {
 }
 
 variable "budget_warn_usd" {
-  description = "Series-total (account-wide) ACTUAL spend that triggers the warning email."
+  description = "Series-total ACTUAL spend tagged to this project that triggers the warning email."
   type        = number
   default     = 15
 }
 
 variable "budget_hardstop_usd" {
-  description = "At this series-total ACTUAL spend, the Budgets action attaches a deny policy to the pipeline roles."
+  description = "At this series-total ACTUAL spend tagged to this project, the Budgets action attaches a deny policy to the pipeline roles."
   type        = number
   default     = 25
+}
+
+variable "account_warn_usd" {
+  description = "Whole-account ACTUAL spend this month (before credits) that triggers the first safety-net email."
+  type        = number
+  default     = 15
+}
+
+variable "account_alert_usd" {
+  description = "Whole-account ACTUAL spend this month (before credits) that triggers the second safety-net email. Also the budget's limit."
+  type        = number
+  default     = 30
 }
 
 variable "budget_forecast_warn_usd" {

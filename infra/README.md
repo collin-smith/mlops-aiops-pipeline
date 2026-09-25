@@ -18,8 +18,8 @@ files; they do **not** get their own stack (keeps IAM coherent).
 | IAM `…-github-actions` + OIDC provider | Stage 5 retrain workflow |
 | SNS `…-alerts` + email sub | Budgets + alarm fan-out |
 | CloudWatch log group + `StepFailure` alarm | MLOps-side smoke detector |
-| AWS Budgets `…-series-total` | account-wide, cumulative from `series_start`: warn at $15, hard-stop at $25 |
-| AWS Budgets `…-account-monthly` | account-wide, monthly: FORECAST warning at $10 |
+| AWS Budgets `…-series-total` | this project (tag `project`), before credits, cumulative from `series_start`: warn at $15, hard-stop at $25 |
+| AWS Budgets `…-account-monthly` | whole account, before credits, monthly: emails at $15 and $30 ACTUAL and at the $10 FORECAST; no action |
 | Cost Anomaly Detection monitor + subscription | unusual daily spend → alerts topic, immediately (`anomaly.tf`) |
 | Budgets **action** | at $25 ACTUAL, auto-attaches a deny policy to the pipeline roles |
 
@@ -45,7 +45,7 @@ until you click it the budget/alarm notifications go nowhere.
 ## The budget hard-stop
 
 `enable_budget_hardstop = true` (default) creates `aws_budgets_budget_action.hardstop`.
-When ACTUAL spend for the whole account, cumulative since `series_start`, crosses $25, AWS Budgets
+When ACTUAL spend tagged to this project (before credits), cumulative since `series_start`, crosses $25, AWS Budgets
 assumes `…-budget-action` and attaches `…-budget-hardstop-deny` to the SageMaker, Glue,
 and GitHub-Actions roles. New training / processing / transform / crawler / pipeline
 runs are then denied until you detach it:
