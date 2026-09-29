@@ -5,6 +5,57 @@ ADR-lite. Newest first. Seeded from the planning docs
 
 ---
 
+## D-039 — Training and batch scoring run as SageMaker Processing jobs on ml.t3 (amends D-006, D-007, D-008)
+
+**Status:** Accepted (2026-09-28). Collin, on the cost: "still relatively small". The first
+real job is `scripts/smoke_processing.py`.
+
+**Context:** AWS denied the quota request for ml.m5.large processing (→ 2) and ml.m5.large
+spot training (→ 5) in ca-central-1. Their advice was to contact Sales. The account's
+non-zero SageMaker quotas are: Processing on ml.t3.medium (4), ml.t3.large (4) and
+ml.t3.xlarge (2), with 4 instances across all Processing jobs, and Serverless Inference (25
+endpoints, concurrency 10). Every instance type has a quota of 0 for Training Jobs (on-demand
+and spot) and for Transform jobs.
+
+**Decision:**
+- Training runs as a **Processing job** on `ml.t3.xlarge`, using AWS's built-in XGBoost image
+  with our own script, and writes `model.tar.gz` to `model-artifacts/`. The model is still
+  trained on SageMaker-managed compute. What changes is the job API.
+- Batch scoring (Stage 5) is a Processing job too, in place of Batch Transform.
+- Pipelines, the Model Registry, the approval gate and the Stage 6 Serverless demo (D-029)
+  stay as designed. A Pipeline uses a `ProcessingStep` where it would have used a
+  `TrainingStep`.
+- Stage 7's anomaly check uses the EWMA/CUSUM in Lambda. RCF is a built-in training
+  algorithm, so it needs a Training Job.
+- The quota request continues on a separate track (upgrade to the Paid plan, then ask Sales
+  for spot training). If it's approved, putting a `TrainingStep` in place of the training
+  `ProcessingStep` is a small change.
+
+**How the job runs** (`scripts/train_job.py` → `src/pipeline/train.py`): the launcher uploads
+`src/` to `code/<job>/` and mounts it and `processed/311/` as inputs. The image is the
+built-in `sagemaker-xgboost:3.2-0`, whose address is pinned per region in
+`src/common/sm_jobs.py` because the locked SageMaker SDK is v3. The job pip-installs the few
+libraries `src/` needs that the image lacks (`src/pipeline/job_requirements.txt`), which
+relies on the outbound internet a job gets outside a VPC (D-020). A custom image in ECR
+would avoid that step, but ECR storage bills every month.
+
+**First run (2026-09-28, `mlops-aiops-train-20260929-010928`):** Completed; 239 s billed on ml.t3.xlarge (fit 137 s, against 75 s on a laptop), about $0.015. Test year: ROC-AUC 0.662, PR-AUC 0.327, the riskiest tenth runs late 36.9% of the time against 18.1% overall, a **2.04× lift**. The local run gives 1.96× on identical rows. The difference is the XGBoost version (3.2.0 in the image, 3.4.1 locally): row subsampling draws differently. The SageMaker run is the Stage 2 result of record, and D-037's "2.0×" stands.
+
+**What this gives up:** managed spot training (Processing has no spot option), hyperparameter
+tuning jobs, the `TrainingStep` conveniences (model packaging, metric regexes), and
+Debugger/Experiments integration. The series used only the first of these.
+
+**Cost:** SageMaker compute for the series goes from about $0.65 to about $1.35. That's
+because of the lost spot discount on training (t3.xlarge on-demand, roughly $0.22/h, against
+m5.large spot at roughly $0.04/h). The other job types cost about the same on a t3 as on an
+m5.large. The ~$8 series estimate and the $25 stop are unchanged.
+
+**Risk:** t3 instances are burstable, so a long CPU-bound fit could slow down once CPU credits
+run out. The smoke test times a small fit. If a full run is too slow, the fallback is to
+train on a stratified ~1M-row sample (see the data-volume section of the cost plan).
+
+---
+
 ## D-038 — The $25 stop counts this project's tagged usage before credits; the account gets a $15/$30 safety net (amends D-031)
 
 **Status:** Accepted (2026-09-24, Collin: "option B, $15/$30, ignore credits").

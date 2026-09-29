@@ -1,0 +1,5 @@
+# Installed at the start of a SageMaker Processing job, on top of the built-in XGBoost
+# image (which brings xgboost, numpy and scikit-learn). Kept to what src/ imports.
+pandas>=2.2
+pyarrow>=16.0
+holidays>=0.53

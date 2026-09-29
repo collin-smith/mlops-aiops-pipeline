@@ -35,6 +35,7 @@ from botocore.exceptions import ClientError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.common.config import aws_tags, get_config  # noqa: E402
+from src.common.guards import budget_hardstop_active  # noqa: E402
 
 # Serverless limits: memory 1024–6144 MB in 1 GB steps; concurrency 1–200.
 MEMORY_MB = 2048
@@ -102,13 +103,6 @@ def latest_approved_package(sm, group: str) -> str:
     if not pkgs:
         raise SystemExit(f"no Approved model package in {group} — approve one first (Stage 4)")
     return pkgs[0]["ModelPackageArn"]
-
-
-def budget_hardstop_active(iam, role_arn: str, project: str) -> bool:
-    """True if the Budgets action has attached its deny policy to the project role."""
-    role = role_arn.rsplit("/", 1)[-1]
-    attached = iam.list_attached_role_policies(RoleName=role)["AttachedPolicies"]
-    return any(p["PolicyName"] == f"{project}-budget-hardstop-deny" for p in attached)
 
 
 def cleanup(sm, name: str) -> None:
