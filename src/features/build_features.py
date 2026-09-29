@@ -102,3 +102,17 @@ def build_features(df: pd.DataFrame, *, keep_key: bool = True) -> pd.DataFrame:
     if leaked:  # defensive: FEATURE_COLUMNS is a fixed allowlist, but never trust that alone
         raise AssertionError(f"leaky columns in feature matrix: {leaked}")
     return result
+
+
+def align_categories(features: pd.DataFrame, reference: pd.DataFrame) -> pd.DataFrame:
+    """Give ``features`` the categorical levels the model was trained on (``reference``).
+
+    A level the model never saw becomes missing, which XGBoost routes down its learned
+    default branch. Mapping it first avoids pandas' deprecated behaviour of silently
+    constructing a Categorical from values outside its categories.
+    """
+    out = features.copy()
+    for c in CATEGORICAL:
+        levels = reference[c].cat.categories
+        out[c] = pd.Categorical(out[c].where(out[c].isin(levels)), categories=levels)
+    return out

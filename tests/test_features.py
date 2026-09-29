@@ -96,3 +96,17 @@ def test_aws_tags_carry_the_project_tag_the_budgets_filter_on():
     from src.common.config import aws_tags
 
     assert aws_tags() == [{"Key": "project", "Value": "mlops-aiops"}]
+
+
+def test_align_categories_maps_unseen_levels_to_missing(requests_frame):
+    from src.features.build_features import align_categories
+
+    train = build_features(requests_frame, keep_key=False)
+    new = requests_frame.copy()
+    new.loc[:4, "service_name"] = "A Category Created Last Month"
+    aligned = align_categories(build_features(new, keep_key=False), train)
+    assert list(aligned["service_name"].cat.categories) == list(
+        train["service_name"].cat.categories
+    )
+    assert aligned["service_name"].iloc[:5].isna().all()
+    assert aligned["service_name"].iloc[5:].notna().all()
