@@ -17,7 +17,7 @@ dependencies = [
 ml = [
     "sagemaker>=2.220",
     "scikit-learn>=1.5",
-    "xgboost>=2.0",
+    "xgboost==3.2.0",  # match the SageMaker image (sagemaker-xgboost:3.2-0, D-039)
     "matplotlib>=3.9",
 ]
 dev = [

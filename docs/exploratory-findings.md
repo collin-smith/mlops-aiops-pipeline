@@ -272,7 +272,7 @@ Threshold computed on train only. Features: `service_name`, `agency_responsible`
 
 | If the team reviews the model's… | …share that actually breach | Lift vs base |
 |---|---|---|
-| top 10% flagged | **77%** | **2.8×** (full data: 35% / 2.0×, D-037) |
+| top 10% flagged | **77%** | **2.8×** (full data: 37% / 2.0×, D-037, D-039) |
 | top 25% flagged | 49% | 1.8× |
 
 **Interpretation:**
