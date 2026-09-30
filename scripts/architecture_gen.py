@@ -58,6 +58,7 @@ _RESICON = {
     "athena":      "athena",
     "sm_pipe":     "sagemaker",
     "sm_proc":     "sagemaker",
+    "sm_eval":     "sagemaker",
     "sm_train":    "sagemaker",
     "cond":        "sagemaker",
     "registry":    "sagemaker",
@@ -110,22 +111,23 @@ NODES: dict[str, tuple] = {
     "s3_proc":    ("S3  processed/", "partitioned Parquet", "storage", "mxgraph.aws4.s3", 250, 200, 1),
     "s3_model":   ("S3  model-artifacts/", "model.tar.gz", "storage", "mxgraph.aws4.s3", 250, 290, 2),
     "s3_score":   ("S3  scored/", "+ Athena view", "storage", "mxgraph.aws4.s3", 250, 370, 6),
-    "sm_pipe":    ("SageMaker Pipeline", "Process→Train→Eval→Register", "ml", "mxgraph.aws4.sagemaker", 730, 120, 3),
+    "sm_pipe":    ("SageMaker Pipeline", "validate → train → evaluate · cached", "ml", "mxgraph.aws4.sagemaker", 730, 120, 3),
     "glue":       ("AWS Glue", "Catalog + Crawler", "analytics", "mxgraph.aws4.glue", 490, 200, 1),
     "athena":     ("Amazon Athena", "2 GB scan cap", "analytics", "mxgraph.aws4.athena", 730, 200, 1),
     "cond":       ("Condition step", "PR-AUC ≥ floor", "security", "mxgraph.aws4.sagemaker", 970, 200, 4),
-    # ECR sits right of the training job so train -> model-artifacts has a clear run left;
-    # sm_proc moved up a row to make room (Stage 3 layout gets revisited when drafted)
-    "ecr":        ("Amazon ECR", "XGBoost image", "compute", "mxgraph.aws4.elastic_container_registry", 970, 290, 2),
-    "sm_proc":    ("SageMaker Processing", "split / evaluate", "ml", "mxgraph.aws4.sagemaker", 970, 120, 3),
+    # From Stage 3 the pipeline's three steps fill this row (D-040), so ECR drops below the
+    # train step; EARLY_POS keeps it right of train on the Stage 2 page
+    "ecr":        ("Amazon ECR", "XGBoost image", "compute", "mxgraph.aws4.elastic_container_registry", 730, 380, 2),
+    "sm_proc":    ("SageMaker Processing", "validate · D-034 gate", "ml", "mxgraph.aws4.sagemaker", 490, 290, 3),
+    "sm_eval":    ("SageMaker Processing", "evaluate → evaluation.json", "ml", "mxgraph.aws4.sagemaker", 970, 290, 3),
     # D-039: no Training Job quota, so the model trains in a Processing job
     "sm_train":   ("SageMaker Processing", "train · XGBoost · t3.xlarge", "ml", "mxgraph.aws4.sagemaker", 730, 290, 2),
     "registry":   ("SageMaker Model Registry", "Model Package Group", "ml", "mxgraph.aws4.sagemaker", 1210, 120, 4),
     "approver":   ("Approver IAM", "separate principal", "security", "mxgraph.aws4.identity_and_access_management_iam", 1210, 200, 4),
     "champ":      ("champion / challenger", "vs approved model", "ml", "mxgraph.aws4.sagemaker", 1210, 290, 5),
     "serverless": ("SageMaker Serverless", "one-off demo · deleted", "ml", "mxgraph.aws4.sagemaker", 1450, 200, 6),
-    "cwmetric":   ("CloudWatch metrics", "MLOpsAIOps/Pipeline", "mgmt", "mxgraph.aws4.cloudwatch", 1450, 290, 3),
-    "batch":      ("SageMaker Processing", "batch-score open requests", "ml", "mxgraph.aws4.sagemaker", 730, 380, 6),
+    "cwmetric":   ("CloudWatch metrics", "MLOpsAIOps/Pipeline", "mgmt", "mxgraph.aws4.cloudwatch", 1450, 120, 3),
+    "batch":      ("SageMaker Processing", "batch-score open requests", "ml", "mxgraph.aws4.sagemaker", 490, 380, 6),
     "monitor":    ("SageMaker Model Monitor", "baseline + schedule", "ml", "mxgraph.aws4.sagemaker", 970, 380, 7),
     "anomaly":    ("Anomaly detection", "EWMA · pipeline + civic", "compute", "mxgraph.aws4.lambda", 1210, 380, 7),
     "oidc":       ("IAM OIDC role", "github-actions", "security", "mxgraph.aws4.identity_and_access_management_iam", 250, 470, 5),
@@ -149,13 +151,13 @@ EDGES: list[tuple] = [
     ("budgets", "sns", "", 1, True),
     ("s3_proc", "sm_train", "Parquet", 2, False),
     ("ecr", "sm_train", "", 2, False),
-    ("athena", "sm_proc", "training CSV", 3, False),
-    ("sm_proc", "sm_train", "", 3, False),
+    ("s3_proc", "sm_proc", "", 3, False),
+    ("s3_proc", "sm_eval", "", 3, False),
+    ("sm_proc", "sm_train", "gate passed", 3, False),
+    ("sm_train", "sm_eval", "model.tar.gz", 3, False),
     ("sm_train", "s3_model", "", 2, False),
-    ("sm_pipe", "sm_proc", "", 3, False),
-    ("sm_pipe", "sm_train", "", 3, False),
     ("sm_pipe", "cwmetric", "run metrics", 3, False),
-    ("sm_pipe", "cond", "evaluation.json", 4, False),
+    ("sm_eval", "cond", "evaluation.json", 4, False),
     ("cond", "registry", "register if pass", 4, False),
     ("approver", "registry", "manual Approve", 4, False),
     ("ebridge", "gha", "", 5, False),
@@ -180,15 +182,35 @@ EDGES: list[tuple] = [
 # Unlisted edges get _default_ports(). Ports at exitY/entryY=0.85 keep horizontal runs below
 # the top-aligned labels.
 _LOW = "exitX=1;exitY=0.85;entryX=0;entryY=0.85;"
+def _lane_into_top(src, dst, x_frac=0.85):
+    """Down out of src, along the gap between rows, into the top of dst."""
+
+    def pts(p):
+        lane = (p(src)[1] + 48 + p(dst)[1]) / 2
+        return [(p(src)[0] + 48 * x_frac, lane), (p(dst)[0] + 24, lane)]
+
+    return pts
+
+
 EDGE_ROUTES: dict[tuple, tuple] = {
     ("pull", "s3_raw"):     (_LOW, lambda p: [(210, p("pull")[1] + 39), (210, p("s3_raw")[1] + 41)]),
     ("pull", "s3_proc"):    (_LOW, None),
     # down into the lane between rows, along it, then into the top of the training job
-    ("s3_proc", "sm_train"): ("exitX=0.85;exitY=1;entryX=0.5;entryY=0;", lambda p: [
-        (p("s3_proc")[0] + 41, (p("s3_proc")[1] + 48 + p("sm_train")[1]) / 2),
-        (p("sm_train")[0] + 24, (p("s3_proc")[1] + 48 + p("sm_train")[1]) / 2),
-    ]),
+    ("s3_proc", "sm_train"): ("exitX=0.85;exitY=1;entryX=0.5;entryY=0;", _lane_into_top("s3_proc", "sm_train")),
+    ("s3_proc", "sm_proc"):  ("exitX=0.85;exitY=1;entryX=0.5;entryY=0;", _lane_into_top("s3_proc", "sm_proc")),
+    ("s3_proc", "sm_eval"):  ("exitX=0.85;exitY=1;entryX=0.5;entryY=0;", _lane_into_top("s3_proc", "sm_eval")),
 }
+# Routes that change once the Stage 3 steps share the training row: model-artifacts is
+# reached under the validate step, and ECR (now below train) feeds it from underneath.
+STEP_ROW_ROUTES: dict[tuple, tuple] = {
+    ("sm_train", "s3_model"): ("exitX=0.2;exitY=1;entryX=0.5;entryY=1;", lambda p: [
+        (p("sm_train")[0] + 10, p("sm_train")[1] + 69),
+        (p("s3_model")[0] + 24, p("sm_train")[1] + 69),
+    ]),
+    ("ecr", "sm_train"):     ("exitX=0.7;exitY=0;entryX=0.7;entryY=1;", None),
+}
+# node -> (last stage, (x, y)): where a node sat on the pages up to that stage
+EARLY_POS = {"ecr": (2, (970, 290))}
 
 STAGE_NAMES = {
     1: "The Question & the Data",
@@ -619,12 +641,15 @@ def _drawio_page(
     def pos(k):
         return nodes[k][4], nodes[k][5]
 
+    visible = set(nodes) if keep is None else keep
+
     for j, e in enumerate(edges):
         a, b = e[0], e[1]
         if keep is not None and (a not in keep or b not in keep):
             continue
+        routes = {**EDGE_ROUTES, **(STEP_ROW_ROUTES if "sm_proc" in visible else {})}
         ports, pts = (
-            EDGE_ROUTES.get((a, b), (_default_ports(a, b, nodes), None)) if routed else ("", None)
+            routes.get((a, b), (_default_ports(a, b, nodes), None)) if routed else ("", None)
         )
         style = (
             "edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=9;endArrow=block;"
@@ -693,6 +718,15 @@ def _default_ports(a, b, nodes):
     return ""
 
 
+def _early(nodes, stage):
+    """Nodes that moved in a later stage keep their old place on the earlier pages."""
+    out = dict(nodes)
+    for k, (last, (x, y)) in EARLY_POS.items():
+        if stage <= last:
+            out[k] = nodes[k][:4] + (x, y) + nodes[k][6:]
+    return out
+
+
 def _compact(nodes, keep):
     """Close up rows a stage page doesn't use, so early stages have no empty band."""
     used = sorted({_row(nodes[k][5]) for k in keep})
@@ -747,7 +781,7 @@ def _mxfile(pages):
         else:
             s = stage
             keep = None if kind == "full" else {k for k, v in NODES.items() if v[6] <= s}
-            nodes = NODES if keep is None else _compact(NODES, keep)
+            nodes = NODES if keep is None else _compact(_early(NODES, s), keep)
             groups = _fit_groups(nodes, keep if keep is not None else set(nodes))
             title = (
                 "Full architecture — MLOps + AIOps pipeline on AWS (Calgary 311)"
