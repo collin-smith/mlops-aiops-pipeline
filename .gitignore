@@ -36,3 +36,7 @@ crash.log
 .DS_Store
 .vscode/
 .idea/
+
+# saved plans hold every variable in plain text, including terraform.tfvars values
+*.tfplan
+infra/*.plan

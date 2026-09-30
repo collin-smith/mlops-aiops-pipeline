@@ -38,7 +38,7 @@ Notebook exploration surfaces the seasonal patterns hiding in the data and build
 Turns the Stage 2 notebook into a real SageMaker Pipelines DAG (validate → train → evaluate), with parameterized, cacheable re-runs instead of hand-run scripts. Starts emitting operational metrics to CloudWatch that Stage 7's anomaly detector will later consume.
 
 **4. Whose Calgary 311 request waits? — a governance gate with the SageMaker Model Registry** *(Model Registry & Governance Gate)* — _pending_
-Adds a Model Registry with a metric-threshold condition step, so only models that clear a PR-AUC bar get registered. A separate IAM "approver" identity gates final approval — an explicit, documented separation of duties, not just a metric check.
+Adds a Model Registry behind a condition step: a model is registered only if it clears a PR-AUC floor **and** a fairness check across the City's planning sectors (it has to find slow requests as well in one part of the city as another). A separate IAM approver role makes the final call; the training role is denied it. The Stage 2 model fails the fairness check, and the gate stays where it is.
 
 **5. Retraining as Calgary's complaints roll in — champion/challenger with GitHub Actions and SageMaker** *(CI/CD: Automated Retraining)* — _pending_
 A monthly scheduled GitHub Actions workflow (OIDC, no static credentials) re-pulls data and retrains a challenger model. It's promoted only if it genuinely beats the currently-approved champion past a guardband, preventing noise-driven flapping.

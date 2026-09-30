@@ -1,17 +1,19 @@
 # Model card — 311 SLA-breach triage
 
-*Template. Populated in Stage 4 and regenerated (or hand-updated) at every promotion.
-Linked from the SageMaker Model Package. Values in `<…>` are filled by
-`src/pipeline/evaluate.py` / the promotion step.*
+*Updated at every promotion and linked from each Model Package's metadata. No version is
+promoted yet: the only candidate so far, the Stage 2 model, was **rejected by the promotion
+gate** on 2026-09-30 (pipeline run `wm2m10zouect`, D-041). Its numbers are below, because a
+rejected model's card is part of the record too.*
 
 | | |
 |---|---|
 | **Model name** | `311-breach-risk` |
-| **Version / Model Package ARN** | `<arn>` |
-| **Date promoted** | `<date>` |
-| **Approved by** | `<iam-principal>` (separate from the training role — see `infra/iam.tf`) |
-| **Training data** | Calgary 311 `iahh-g8bj`, snapshot `asof=<date>`, requests from `<start>`–`<end>` |
-| **Algorithm** | XGBoost (SageMaker built-in), `<hyperparams>` |
+| **Status** | Rejected by the gate: sector recall ratio 0.55, floor 0.8. Not registered. |
+| **Version / Model Package ARN** | none (the group `mlops-aiops-breach-risk` is empty) |
+| **Date promoted** | not promoted |
+| **Approved by** | the `mlops-aiops-approver` role, which is separate from the training role (`infra/registry.tf`); nobody yet |
+| **Training data** | Calgary 311 `iahh-g8bj`, snapshot `asof=2026-09-23`; the last year is held out as the test year |
+| **Algorithm** | XGBoost 3.2.0 (the SageMaker built-in image's version), trained as a Processing job (D-039); hyperparameters in `src/pipeline/train.py` `PARAMS` |
 
 ## Intended use
 
@@ -41,15 +43,41 @@ field derived from `updated_date`, `closed_date`, or `status_description` (leaka
 
 | Metric | Value |
 |---|---|
-| ROC-AUC (temporal holdout) | `<x>` |
-| PR-AUC (temporal holdout) | `<x>` (base rate `<x>`) |
-| Top-decile lift | `<x>`× |
+| ROC-AUC (temporal holdout) | 0.662 |
+| PR-AUC (temporal holdout) | 0.327 (base rate 0.181) |
+| Top-decile lift | 2.04× (36.9% of flagged requests run late, against 18.1% overall) |
+| Top-decile recall | 0.204 |
+
+Test year: 476,613 requests. The saved artifact reproduces these exactly when reloaded.
 
 ### Where it under-performs
 
-`<table: the 3–5 service categories and communities with the lowest per-group AUC / worst
-calibration>` — reported deliberately. A triage model that is systematically wrong for one
-category or one part of the city is a governance issue, not just a number.
+Reported deliberately: a triage model that is systematically weaker in one part of the
+city is a governance issue, not just a number. At the operating point (flag the riskiest
+10% with one city-wide cutoff), recall is the share of late requests the flag catches:
+
+| Sector | Requests | Late | Flagged | Recall | Lift |
+|---|---:|---:|---:|---:|---:|
+| SOUTHEAST | 42,054 | 18.1% | 13.5% | **0.290** | 2.15 |
+| NORTH | 46,150 | 16.9% | 11.2% | 0.252 | 2.25 |
+| NORTHEAST | 60,502 | 17.7% | 10.3% | 0.247 | 2.40 |
+| NORTHWEST | 51,103 | 16.7% | 10.9% | 0.231 | 2.13 |
+| EAST | 22,458 | 18.1% | 9.7% | 0.223 | 2.30 |
+| SOUTH | 71,443 | 16.5% | 8.7% | 0.191 | 2.19 |
+| CENTRE | 116,868 | 19.9% | 10.3% | 0.176 | 1.71 |
+| WEST | 34,747 | 16.2% | 8.0% | **0.159** | 1.98 |
+| *no community* | 31,288 | 22.5% | 5.8% | 0.094 | 1.61 |
+
+The flag catches 29% of SOUTHEAST's late requests but 16% of WEST's: a ratio of 0.55,
+against the gate's floor of 0.8. By growth class it's 0.70 (DEVELOPING 0.209 against
+COMPLETE 0.298). Lift stays well above 1 everywhere, so a flag means about the same thing
+wherever it lands; the problem is how often it lands. The single cutoff flags 13.5% of
+SOUTHEAST's requests and 8.0% of WEST's, so the areas where high-risk categories cluster
+get more of the triage. Requests with no community are the weakest group of all (recall
+0.094); they are reported, not gated.
+
+Known category misfits (`docs/exploratory-findings.md`): traffic signs are over-flagged
+because of the August 2025 backlog purge; graffiti and transit passes are under-flagged.
 
 ## Known limitations
 

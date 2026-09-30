@@ -1,11 +1,25 @@
-"""Stage 3: the training pipeline as a SageMaker Pipelines definition.
+"""The training pipeline as a SageMaker Pipelines definition (Stages 3 and 4).
 
 Three Processing steps, in order (D-039: the account has no Training Job quota):
 
     Validate  the data-validation gate (D-034); a failed check stops the run before any
               training spend
     Train     the Stage 2 model; writes model.tar.gz and metrics.json
-    Evaluate  scores the test year with the saved artifact and writes evaluation.json
+    Evaluate  scores the test year with the saved artifact; writes evaluation.json and
+              fairness.json
+
+then the promotion gate (Stage 4, D-041):
+
+    Gate      a Condition step on the two reports: PR-AUC, the sector recall ratio and
+              the lowest group lift must all clear ``GATE``
+    Register  (if it passes) a new version in the Model Package Group, status
+              PendingManualApproval; only the approver role can approve it
+    Rejected  (if it doesn't) a Fail step, so the run ends Failed with the numbers in
+              its reason, and nothing is registered
+
+The gate's thresholds are constants here, not pipeline parameters. Anyone who can start a
+run can set a parameter, so a parameter would let the gate be lowered for one run.
+Changing a threshold takes a commit.
 
 The definition is plain JSON (schema 2020-12-01), built here without the SageMaker SDK,
 so it can be read, diffed and unit-tested as data. ``scripts/pipeline.py`` creates or
@@ -20,10 +34,12 @@ snapshot date goes into every step's environment (a new snapshot is a re-run too
 from __future__ import annotations
 
 from src.common.sm_jobs import PROCESSING_INSTANCE_TYPES
+from src.promote.fairness import FairnessThresholds
 
 IN_CODE = "/opt/ml/processing/input/code"
 IN_DATA = "/opt/ml/processing/input/data"
 IN_MODEL = "/opt/ml/processing/input/model"
+IN_COMMUNITIES = "/opt/ml/processing/input/communities"
 OUT = "/opt/ml/processing/output"
 REQUIREMENTS = "src/pipeline/job_requirements.txt"
 
@@ -38,6 +54,32 @@ _BOOT = (
     f'cd {IN_CODE} && pip install -q -r {REQUIREMENTS} && exec python3 -m src.pipeline.step "$@"'
 )
 ENTRYPOINT = ["bash", "-c", _BOOT, "step"]
+
+
+# The promotion gate (D-041). Chance-level PR-AUC is the test year's base rate, 0.18; the
+# Stage 2 model scores 0.327. The fairness floors are D-035's.
+_FAIR = FairnessThresholds()
+GATE = {
+    "pr_auc": 0.25,
+    "recall_ratio": _FAIR.min_recall_ratio,
+    "min_group_lift": _FAIR.min_group_lift,
+}
+# JsonGet paths into the Evaluate step's two reports
+GATE_PATHS = {
+    "pr_auc": ("EvaluationReport", "binary_classification_metrics.pr_auc.value"),
+    "recall_ratio": ("FairnessReport", "recall_ratio.value"),
+    "min_group_lift": ("FairnessReport", "min_group_lift.value"),
+}
+PROPERTY_FILES = [
+    {"PropertyFileName": name, "OutputName": "evaluation", "FilePath": file}
+    for name, file in (("EvaluationReport", "evaluation.json"), ("FairnessReport", "fairness.json"))
+]
+MODEL_CARD_URL = "https://github.com/collin-smith/mlops-aiops-pipeline/blob/main/docs/model-card.md"
+
+
+def model_package_group(project: str) -> str:
+    """Must match infra/registry.tf."""
+    return f"{project}-breach-risk"
 
 
 def param(name: str) -> dict:
@@ -55,6 +97,99 @@ def run_prefix(bucket: str, step: str) -> dict:
                 step.lower(),
             ],
         }
+    }
+
+
+def json_get(key: str) -> dict:
+    """The gate's value for ``key``, read from the Evaluate step's report at run time."""
+    file, path = GATE_PATHS[key]
+    return {
+        "Std:JsonGet": {
+            "PropertyFile": {"Get": f"Steps.Evaluate.PropertyFiles.{file}"},
+            "Path": path,
+        }
+    }
+
+
+def output_file(step: str, output: str, file: str) -> dict:
+    """The S3 URI of ``file`` inside a step's output, resolved at run time."""
+    uri = {"Get": f"Steps.{step}.ProcessingOutputConfig.Outputs['{output}'].S3Output.S3Uri"}
+    return {"Std:Join": {"On": "/", "Values": [uri, file]}}
+
+
+def _gate(*, image_uri: str, group: str) -> dict:
+    conditions = [
+        {"Type": "GreaterThanOrEqualTo", "LeftValue": json_get(k), "RightValue": v}
+        for k, v in GATE.items()
+    ]
+    register = {
+        "Name": "Register",
+        "Type": "RegisterModel",
+        "Arguments": {
+            "ModelPackageGroupName": group,
+            "ModelPackageDescription": {
+                "Std:Join": {
+                    "On": " ",
+                    "Values": [
+                        "snapshot",
+                        param("AsOf"),
+                        "run",
+                        {"Get": "Execution.PipelineExecutionId"},
+                    ],
+                }
+            },
+            # a person approves it, under a different role (infra/registry.tf)
+            "ModelApprovalStatus": "PendingManualApproval",
+            "InferenceSpecification": {
+                "Containers": [
+                    {
+                        "Image": image_uri,
+                        "ModelDataUrl": output_file("Train", "model", "model.tar.gz"),
+                    }
+                ],
+                "SupportedContentTypes": ["text/csv"],
+                "SupportedResponseMIMETypes": ["text/csv"],
+            },
+            "ModelMetrics": {
+                "ModelQuality": {
+                    "Statistics": {
+                        "ContentType": "application/json",
+                        "S3Uri": output_file("Evaluate", "evaluation", "evaluation.json"),
+                    }
+                },
+                "Bias": {
+                    "Report": {
+                        "ContentType": "application/json",
+                        "S3Uri": output_file("Evaluate", "evaluation", "fairness.json"),
+                    }
+                },
+            },
+            # what a reviewer needs to trace the version back to its data and code
+            "CustomerMetadataProperties": {
+                "asof": param("AsOf"),
+                "code_uri": param("CodeUri"),
+                "pipeline_execution": {"Get": "Execution.PipelineExecutionId"},
+                "gate": ";".join(f"{k}>={v}" for k, v in GATE.items()),
+                "model_card": MODEL_CARD_URL,
+            },
+        },
+    }
+    values = ["The promotion gate rejected this model. Needed:"]
+    values += [f"{k} >= {v}," for k, v in GATE.items()]
+    values.append("got:")
+    for k in GATE:
+        values += [f"{k}", json_get(k)]
+    values.append("(see evaluation.json and fairness.json)")
+    rejected = {
+        "Name": "Rejected",
+        "Type": "Fail",
+        "Arguments": {"ErrorMessage": {"Std:Join": {"On": " ", "Values": values}}},
+    }
+    return {
+        "Name": "Gate",
+        "Type": "Condition",
+        "DependsOn": ["Evaluate"],
+        "Arguments": {"Conditions": conditions, "IfSteps": [register], "ElseSteps": [rejected]},
     }
 
 
@@ -138,6 +273,7 @@ def build_definition(
     instance_type: str = "ml.t3.xlarge",
 ) -> dict:
     """The pipeline definition. The keyword values become the parameters' defaults."""
+    group = model_package_group(project)
     if instance_type not in PROCESSING_INSTANCE_TYPES:
         raise ValueError(
             f"{instance_type} has no Processing quota here; use one of {PROCESSING_INSTANCE_TYPES}"
@@ -156,6 +292,13 @@ def build_definition(
     code = _input("code", param("CodeUri"), IN_CODE)
     data = _input("data", data_uri, IN_DATA)
     model_uri = {"Get": "Steps.Train.ProcessingOutputConfig.Outputs['model'].S3Output.S3Uri"}
+    # the community lookup frozen with the same snapshot (socrata_pull.py communities)
+    communities_uri = {
+        "Std:Join": {
+            "On": "",
+            "Values": [f"s3://{bucket}/raw/communities/asof=", param("AsOf"), "/"],
+        }
+    }
     common = {"bucket": bucket, "image_uri": image_uri, "role_arn": role_arn, "env": env}
 
     steps = [
@@ -177,13 +320,17 @@ def build_definition(
         ),
         _step(
             "Evaluate",
-            ["evaluate", "--model", IN_MODEL, "--data", IN_DATA, "--out", OUT],
-            [code, data, _input("model", model_uri, IN_MODEL)],
+            ["evaluate", "--model", IN_MODEL, "--data", IN_DATA,
+             "--communities", IN_COMMUNITIES, "--out", OUT],
+            [code, data, _input("model", model_uri, IN_MODEL),
+             _input("communities", communities_uri, IN_COMMUNITIES)],
             "evaluation",
             depends_on=["Train"],
             **common,
         ),
-    ]
+    ]  # fmt: skip
+    steps[-1]["PropertyFiles"] = PROPERTY_FILES
+    steps.append(_gate(image_uri=image_uri, group=group))
     return {
         "Version": "2020-12-01",
         "Metadata": {},

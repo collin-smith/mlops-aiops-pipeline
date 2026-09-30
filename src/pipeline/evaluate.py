@@ -6,10 +6,18 @@ shapes the features with ``feature_schema.json`` (as batch scoring will in Stage
 scores them with the saved booster. If its numbers don't match the ones training recorded,
 something the model depends on didn't make it into the artifact, and the step fails.
 
-    python -m src.pipeline.evaluate --model <dir with model.tar.gz> --data <parquet dir> --out <dir>
+    python -m src.pipeline.evaluate --model <dir with model.tar.gz> --data <parquet dir> \
+        --communities <dir with communities.json> --out <dir>
 
-It writes ``evaluation.json`` in the layout SageMaker's model-quality reports use
-(``binary_classification_metrics.<name>.value``), which the Stage 4 condition step reads.
+It writes two reports, which the Stage 4 gate reads:
+
+* ``evaluation.json``, in the layout SageMaker's model-quality reports use
+  (``binary_classification_metrics.<name>.value``)
+* ``fairness.json``, the per-sector check (D-035, ``src/promote/fairness.py``) on the
+  same test-year scores
+
+A failed fairness check doesn't fail this step. The gate reads the report and decides,
+the same way it decides on PR-AUC, so a rejection is a gate outcome and not a crash.
 """
 
 from __future__ import annotations
@@ -25,8 +33,10 @@ import pandas as pd
 from src.features.build_features import align_to_schema, build_features
 from src.features.build_labels import assert_no_leakage, build_training_labels
 from src.pipeline.train import evaluate, load_requests
+from src.promote import fairness
 
 REPORT_NAME = "evaluation.json"
+COMMUNITIES_FILE = "communities.json"
 # metrics the artifact must reproduce from training's metrics.json
 CHECKED = ("roc_auc", "pr_auc", "top_decile_lift")
 TOLERANCE = 1e-3
@@ -72,21 +82,40 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--model", type=Path, required=True, help="directory holding model.tar.gz")
     ap.add_argument("--data", type=Path, required=True, help="processed Parquet directory")
-    ap.add_argument("--out", type=Path, required=True, help=f"where {REPORT_NAME} goes")
+    ap.add_argument(
+        "--communities", type=Path, required=True, help=f"directory holding {COMMUNITIES_FILE}"
+    )
+    ap.add_argument(
+        "--out", type=Path, required=True, help=f"where {REPORT_NAME} and fairness.json go"
+    )
     args = ap.parse_args(argv)
 
     booster, schema = load_artifact(args.model)
     _, test, _ = build_training_labels(load_requests(args.data))
     X_test = align_to_schema(build_features(test, keep_key=False), schema)
     assert_no_leakage(X_test)
-    metrics = evaluate(test["breach"].to_numpy(), predict(booster, X_test))
+    scores = predict(booster, X_test)
+    metrics = evaluate(test["breach"].to_numpy(), scores)
+    fair = fairness.fairness_report(
+        test[["breach", "comm_code"]].assign(pred=scores),
+        fairness.load_communities(args.communities / COMMUNITIES_FILE),
+    )
 
     training_file = args.model / "metrics.json"
     training = json.loads(training_file.read_text()) if training_file.exists() else None
     report = build_report(metrics, training)
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / REPORT_NAME).write_text(json.dumps(report, indent=2))
+    # strict JSON: the gate's JsonGet can't parse NaN
+    (args.out / fairness.REPORT_NAME).write_text(json.dumps(fair, indent=2, allow_nan=False))
     print(json.dumps(report), flush=True)
+    print(
+        json.dumps(
+            {k: fair[k] for k in ("passed", "recall_ratio", "min_group_lift")}
+            | {d: v["problems"] for d, v in fair["dimensions"].items()}
+        ),
+        flush=True,
+    )
 
     if report.get("matches_training") is False:
         diffs = report["difference_from_training"]

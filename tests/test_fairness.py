@@ -88,6 +88,25 @@ def test_requests_without_a_community_are_never_gated():
     assert groups["UNKNOWN"]["rows"] == 2_000
 
 
+def test_non_residential_srg_classes_are_reported_not_gated():
+    """srg N/A (industrial land, parks) and FUTURE (unbuilt) aren't kinds of community."""
+    preds = _predictions()
+    extra = pd.DataFrame(
+        [{"comm_code": "IND", "sector": "CENTRE", "srg": "N/A"},
+         {"comm_code": "FUT", "sector": "CENTRE", "srg": "FUTURE"}]
+    )  # fmt: skip
+    comms = pd.concat([_communities(), extra], ignore_index=True)
+    # big enough to measure, and the model is useless there
+    blind = pd.DataFrame(
+        {"comm_code": ["IND", "FUT"] * 2_000, "breach": [1, 1, 0, 0] * 1_000, "pred": -5.0}
+    )
+    report = fairness_report(pd.concat([preds, blind], ignore_index=True), comms)
+    groups = {g["group"]: g for g in report["dimensions"]["srg"]["groups"]}
+    assert groups["N/A"]["gated"] is False and groups["N/A"]["rows"] == 2_000
+    assert groups["FUTURE"]["gated"] is False
+    assert report["dimensions"]["srg"]["passed"]
+
+
 def test_fewer_than_two_measurable_groups_fails_closed():
     preds = _predictions()
     preds = preds[preds["comm_code"].str.startswith("NO")]  # NORTHWEST only

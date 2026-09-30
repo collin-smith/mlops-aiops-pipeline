@@ -23,8 +23,10 @@ address quadrants, since the open data has no quadrant field:
 Gate: in every dimension, the lowest group recall ÷ the highest must be at least
 ``min_recall_ratio`` (0.8, after the four-fifths rule of thumb), and every group's lift
 at least ``min_group_lift``. Groups too small to measure are reported, not gated.
-Requests with no community (``UNKNOWN``) are reported but never gated. Fewer than two
-measurable groups is a failure: the gate can't vouch for what it can't measure.
+Requests with no community (``UNKNOWN``) are reported but never gated, and neither are
+the ``srg`` values that aren't residential classes (``REPORT_ONLY``: ``N/A`` is industrial
+land, parks and residual sub-areas; ``FUTURE`` is unbuilt residual sub-areas). Fewer than
+two measurable groups is a failure: the gate can't vouch for what it can't measure.
 
 This checks the model's *performance* across areas. It says nothing about why areas
 wait different lengths of time. That is Stage 8's question, and the City hasn't
@@ -49,6 +51,10 @@ log = logging.getLogger(__name__)
 REPORT_NAME = "fairness.json"
 DIMENSIONS: tuple[str, ...] = ("sector", "srg")
 UNKNOWN = "UNKNOWN"
+# Groups that are reported but never gated, per dimension (D-041). These srg values aren't
+# kinds of community: N/A covers 43 industrial areas, 13 residual sub-areas and 3 major
+# parks, and FUTURE covers 30 unbuilt residual sub-areas.
+REPORT_ONLY: dict[str, frozenset[str]] = {"srg": frozenset({"N/A", "FUTURE"})}
 
 
 @dataclass(frozen=True)
@@ -116,6 +122,7 @@ def fairness_report(
             (g["rows"] >= t.min_group_rows)
             & (g["positives"] >= t.min_group_positives)
             & (g["group"] != UNKNOWN)
+            & ~g["group"].isin(REPORT_ONLY.get(dim, frozenset()))
         )
         gated = g[g["gated"]]
         problems = []
@@ -159,6 +166,24 @@ def fairness_report(
         "min_group_lift": {"value": _worst("min_group_lift")},
         "dimensions": dimensions,
     }
+
+
+def summary_lines(report: dict) -> list[str]:
+    """One line per group: the per-sector table a reviewer reads."""
+    lines = [
+        f"fairness {'PASS' if report['passed'] else 'FAIL'}: "
+        f"recall ratio {report['recall_ratio']['value']}, "
+        f"lowest group lift {report['min_group_lift']['value']}"
+    ]
+    for dim, d in report["dimensions"].items():
+        lines.append(f"  {dim}: {'PASS' if d['passed'] else 'FAIL'} {'; '.join(d['problems'])}")
+        for g in d["groups"]:
+            gated = "" if g["gated"] else "  (reported, not gated)"
+            lines.append(
+                f"    {g['group']:<13} rows {g['rows']:>7,}  late {g['base_rate']:.1%}  "
+                f"flagged {g['flag_rate']:.1%}  recall {g['recall']}  lift {g['lift']}{gated}"
+            )
+    return lines
 
 
 def load_communities(path: str | Path) -> pd.DataFrame:

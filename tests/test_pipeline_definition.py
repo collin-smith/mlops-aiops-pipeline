@@ -1,4 +1,4 @@
-"""Stage 3 pipeline definition and its launcher. The definition is data, so it's tested as
+"""Stage 3-4 pipeline definition and its launcher. The definition is data, so it's tested as
 data: step order, what each step reads and writes, the cache key, limits. No AWS calls."""
 
 from __future__ import annotations
@@ -39,17 +39,21 @@ def _steps(defn=None):
     return {s["Name"]: s for s in (defn or _definition())["Steps"]}
 
 
-def test_three_processing_steps_in_order():
+def _processing():
+    return {n: s for n, s in _steps().items() if s["Type"] == "Processing"}
+
+
+def test_three_processing_steps_then_the_gate():
     steps = _steps()
-    assert list(steps) == ["Validate", "Train", "Evaluate"]
-    assert all(s["Type"] == "Processing" for s in steps.values())
+    assert list(steps) == ["Validate", "Train", "Evaluate", "Gate"]
+    assert list(_processing()) == ["Validate", "Train", "Evaluate"]
     assert "DependsOn" not in steps["Validate"]
     assert steps["Train"]["DependsOn"] == ["Validate"]
     assert steps["Evaluate"]["DependsOn"] == ["Train"]
 
 
 def test_every_step_is_cached_limited_and_small():
-    for name, s in _steps().items():
+    for name, s in _processing().items():
         a = s["Arguments"]
         assert s["CacheConfig"] == {"Enabled": True, "ExpireAfter": "P30D"}
         assert a["StoppingCondition"]["MaxRuntimeInSeconds"] == d.MAX_RUNTIME[name] <= 3600
@@ -71,7 +75,7 @@ def test_evaluate_reads_the_model_train_wrote():
 
 
 def test_outputs_land_under_the_execution_id():
-    for name, s in _steps().items():
+    for name, s in _processing().items():
         (out,) = s["Arguments"]["ProcessingOutputConfig"]["Outputs"]
         values = out["S3Output"]["S3Uri"]["Std:Join"]["Values"]
         assert values == [
@@ -83,7 +87,7 @@ def test_outputs_land_under_the_execution_id():
 
 def test_cache_key_changes_with_code_and_snapshot():
     """A Processing step's cache key is its command, environment and input locations."""
-    for s in _steps().values():
+    for s in _processing().values():
         a = s["Arguments"]
         code = next(i for i in a["ProcessingInputs"] if i["InputName"] == "code")
         assert code["S3Input"]["S3Uri"] == {"Get": "Parameters.CodeUri"}
@@ -91,7 +95,7 @@ def test_cache_key_changes_with_code_and_snapshot():
 
 
 def test_entrypoint_runs_the_step_through_the_metrics_wrapper():
-    for name, s in _steps().items():
+    for name, s in _processing().items():
         app = s["Arguments"]["AppSpecification"]
         assert app["ContainerEntrypoint"] == d.ENTRYPOINT
         assert all(len(e) <= 256 for e in app["ContainerEntrypoint"])
@@ -108,6 +112,96 @@ def test_parameters_carry_the_defaults():
         "MaxTrainRows": "0",
     }
     assert all(p["Type"] == "String" for p in _definition()["Parameters"])
+
+
+def test_evaluate_reads_the_communities_frozen_with_the_snapshot():
+    a = _steps()["Evaluate"]["Arguments"]
+    inputs = {i["InputName"]: i["S3Input"] for i in a["ProcessingInputs"]}
+    assert inputs["communities"]["S3Uri"] == {
+        "Std:Join": {
+            "On": "",
+            "Values": ["s3://b/raw/communities/asof=", {"Get": "Parameters.AsOf"}, "/"],
+        }
+    }
+    args = a["AppSpecification"]["ContainerArguments"]
+    assert args[args.index("--communities") + 1] == inputs["communities"]["LocalPath"]
+
+
+# --- the promotion gate (Stage 4) -----------------------------------------------------
+
+
+def _gate():
+    return _steps()["Gate"]
+
+
+def test_gate_reads_both_reports_evaluate_declares():
+    files = {f["PropertyFileName"]: f for f in _steps()["Evaluate"]["PropertyFiles"]}
+    assert files["EvaluationReport"]["FilePath"] == "evaluation.json"
+    assert files["FairnessReport"]["FilePath"] == "fairness.json"
+    # a property file must name an output the step really has
+    (out,) = _steps()["Evaluate"]["Arguments"]["ProcessingOutputConfig"]["Outputs"]
+    assert {f["OutputName"] for f in files.values()} == {out["OutputName"]}
+
+    conds = _gate()["Arguments"]["Conditions"]
+    assert len(conds) == 3
+    for c, (key, floor) in zip(conds, d.GATE.items(), strict=True):
+        assert c["Type"] == "GreaterThanOrEqualTo"
+        assert c["RightValue"] == floor
+        get = c["LeftValue"]["Std:JsonGet"]
+        file, path = d.GATE_PATHS[key]
+        assert get["PropertyFile"] == {"Get": f"Steps.Evaluate.PropertyFiles.{file}"}
+        assert file in files
+        assert get["Path"] == path
+
+
+def test_gate_paths_exist_in_the_reports_the_code_writes():
+    """A typo'd path is the classic way a gate silently stops gating."""
+    from src.pipeline.evaluate import build_report
+    from src.promote.fairness import fairness_report
+    from tests.test_fairness import _communities, _predictions
+
+    reports = {
+        "EvaluationReport": build_report(
+            {"roc_auc": 0.66, "pr_auc": 0.33, "top_decile_lift": 2.0, "n_test": 10}, None
+        ),
+        "FairnessReport": fairness_report(_predictions(), _communities()),
+    }
+    for file, path in d.GATE_PATHS.values():
+        node = reports[file]
+        for part in path.split("."):
+            node = node[part]
+        assert isinstance(node, float)
+
+
+def test_gate_thresholds_are_code_not_run_parameters():
+    params = {p["Name"] for p in _definition()["Parameters"]}
+    assert not params & {"MinPrAuc", "MinRecallRatio", "MinGroupLift"}
+    assert d.GATE == {"pr_auc": 0.25, "recall_ratio": 0.8, "min_group_lift": 1.5}
+    assert all(isinstance(c["RightValue"], float) for c in _gate()["Arguments"]["Conditions"])
+
+
+def test_pass_registers_for_manual_approval_and_fail_registers_nothing():
+    a = _gate()["Arguments"]
+    (register,) = a["IfSteps"]
+    (rejected,) = a["ElseSteps"]
+    assert register["Type"] == "RegisterModel"
+    assert rejected["Type"] == "Fail"
+    r = register["Arguments"]
+    assert r["ModelPackageGroupName"] == "mlops-aiops-breach-risk"
+    assert r["ModelApprovalStatus"] == "PendingManualApproval"
+    (container,) = r["InferenceSpecification"]["Containers"]
+    assert container["ModelDataUrl"]["Std:Join"]["Values"] == [
+        {"Get": "Steps.Train.ProcessingOutputConfig.Outputs['model'].S3Output.S3Uri"},
+        "model.tar.gz",
+    ]
+    bias = r["ModelMetrics"]["Bias"]["Report"]["S3Uri"]["Std:Join"]["Values"]
+    assert bias[-1] == "fairness.json"
+    meta = r["CustomerMetadataProperties"]
+    assert meta["gate"] == "pr_auc>=0.25;recall_ratio>=0.8;min_group_lift>=1.5"
+    assert meta["asof"] == {"Get": "Parameters.AsOf"}
+    # the failure reason carries the numbers that failed
+    values = rejected["Arguments"]["ErrorMessage"]["Std:Join"]["Values"]
+    assert sum("Std:JsonGet" in v for v in values if isinstance(v, dict)) == 3
 
 
 def test_definition_is_json_and_rejects_no_quota_instances():
@@ -194,3 +288,52 @@ def test_step_report_marks_cache_hits_and_skips_their_cost():
     ]
     (row,) = launcher.step_report(None, steps, "mlops-aiops", "ml.t3.xlarge")
     assert row == {"step": "Validate", "status": "Succeeded", "cached": True, "job": "old-v"}
+
+
+def _gate_steps(outcome: str) -> list[dict]:
+    steps = [
+        {
+            "StepName": "Gate",
+            "StepStatus": "Succeeded",
+            "Metadata": {"Condition": {"Outcome": outcome}},
+        }
+    ]
+    if outcome == "True":
+        arn = "arn:aws:sagemaker:r:1:model-package/mlops-aiops-breach-risk/1"
+        steps.append(
+            {
+                "StepName": "Register",
+                "StepStatus": "Succeeded",
+                "Metadata": {"RegisterModel": {"Arn": arn}},
+            }
+        )
+    else:
+        steps.append(
+            {
+                "StepName": "Rejected",
+                "StepStatus": "Failed",
+                "Metadata": {"Fail": {"ErrorMessage": "recall_ratio 0.55"}},
+            }
+        )
+    return steps
+
+
+def test_verdict_tells_a_rejection_from_a_broken_run():
+    passed = launcher.step_report(None, _gate_steps("True"), "mlops-aiops", "ml.t3.xlarge")
+    assert passed[1]["model_package"].endswith("breach-risk/1")
+    assert launcher.verdict("Succeeded", passed).startswith("PASSED the gate; registered")
+
+    rejected = launcher.step_report(None, _gate_steps("False"), "mlops-aiops", "ml.t3.xlarge")
+    assert rejected[1]["reason"] == "recall_ratio 0.55"
+    assert launcher.verdict("Failed", rejected) == "REJECTED by the gate; nothing was registered"
+
+    assert launcher.verdict("Failed", []) == "run Failed before the gate decided"
+
+
+def test_fairness_summary_marks_groups_that_are_not_gated():
+    from src.promote.fairness import fairness_report, summary_lines
+    from tests.test_fairness import _communities, _predictions
+
+    lines = summary_lines(fairness_report(_predictions(), _communities()))
+    assert lines[0].startswith("fairness PASS")
+    assert any("NORTHWEST" in line for line in lines)

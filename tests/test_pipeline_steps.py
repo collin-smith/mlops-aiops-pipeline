@@ -25,16 +25,26 @@ def test_train_then_evaluate_reproduces_training_metrics(tmp_path, requests_fram
     from src.pipeline import train
 
     data, model, out = tmp_path / "data", tmp_path / "model", tmp_path / "eval"
+    comms = tmp_path / "communities"
     data.mkdir()
+    comms.mkdir()
     requests_frame.to_parquet(data / "part-0.parquet")
+    (comms / evaluate.COMMUNITIES_FILE).write_text(
+        json.dumps([{"comm_code": "X", "sector": "CENTRE", "srg": "ESTABLISHED"}])
+    )
     assert train.main(["--data", str(data), "--out", str(model)]) == 0
-    assert evaluate.main(["--model", str(model), "--data", str(data), "--out", str(out)]) == 0
+    args = ["--model", str(model), "--data", str(data), "--communities", str(comms)]
+    assert evaluate.main([*args, "--out", str(out)]) == 0
 
     report = json.loads((out / evaluate.REPORT_NAME).read_text())
     assert report["matches_training"] is True
-    # the path the Stage 4 condition step reads
+    # the paths the Stage 4 gate reads
     assert 0 <= report["binary_classification_metrics"]["pr_auc"]["value"] <= 1
     assert report["n_test"] > 0
+    fair = json.loads((out / "fairness.json").read_text())
+    # one community is one measurable group at most: the check can't vouch, so it fails
+    assert fair["passed"] is False
+    assert fair["dimensions"]["sector"]["groups"][0]["group"] == "CENTRE"
 
 
 def test_report_flags_an_artifact_that_disagrees_with_training():

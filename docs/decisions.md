@@ -5,6 +5,57 @@ ADR-lite. Newest first. Seeded from the planning docs
 
 ---
 
+## D-041 — The Stage 4 promotion gate: thresholds in code, a separate approver role, and a Stage 2 model it rejects
+
+**Status:** Accepted (2026-09-30). Amends D-035.
+
+**Decision:**
+- After Evaluate, a **Condition step (`Gate`)** reads the Evaluate step's two reports as
+  property files and needs all three: PR-AUC ≥ 0.25 (`evaluation.json`), sector recall ratio
+  ≥ 0.8 and lowest group lift ≥ 1.5 (`fairness.json`, D-035). Evaluate now writes
+  `fairness.json` beside `evaluation.json`, from the same test-year scores and the
+  `raw/communities/asof=<AsOf>/` lookup frozen with the snapshot. A failed fairness check
+  doesn't fail Evaluate; the gate decides.
+- **Pass:** `Register` adds a version to the Model Package Group `<project>-breach-risk` as
+  `PendingManualApproval`, with both reports attached as model metrics and the snapshot, code
+  location, run ID, gate and model card link as metadata.
+  **Fail:** a Fail step (`Rejected`) ends the run as Failed, with the numbers in its reason.
+  Nothing is registered. A rejection isn't a pipeline fault: it doesn't emit `StepFailure`,
+  and the launcher reports it as "REJECTED by the gate".
+- **The thresholds are constants in `definition.py`, not pipeline parameters.** Anyone who
+  can start a run can set a parameter, so a parameter would let the gate be lowered for one
+  run. Changing a threshold takes a commit. The PR-AUC floor sits between chance (the base
+  rate, 0.18) and the Stage 2 model (0.327).
+- **Separation of duties (`infra/registry.tf`):** an `…-approver` role can set a version
+  Approved or Rejected and read the run's reports, and nothing else. The training role and the
+  CI role lose `UpdateModelPackage`. The training role also gets an explicit deny on it, and on
+  `CreateModelPackage` with any status but `PendingManualApproval`, so it can't register a
+  version as already approved. `scripts/approve.py` reviews a version, decides as the approver
+  role (refusing to approve a failed fairness report), and asks IAM's policy simulator who can
+  approve.
+- **srg `N/A` and `FUTURE` are reported, not gated.** They aren't kinds of community: `N/A` is
+  43 industrial areas, 13 residual sub-areas and 3 major parks; `FUTURE` is 30 unbuilt
+  residual sub-areas.
+
+**The Stage 2 model fails the gate, and the gate stays.** Checked locally on the full data
+with the pipeline's own XGBoost version (identical metrics to the SageMaker run): PR-AUC
+0.327 and lowest group lift 1.71 pass, but recall in the top decile ranges from 0.159 (WEST)
+to 0.290 (SOUTHEAST), a ratio of 0.55. By srg it's 0.70 (DEVELOPING against COMPLETE). The
+city-wide cutoff flags 8.0% of WEST's requests and 13.5% of SOUTHEAST's, so where the
+riskiest categories cluster decides who the triage helps. Collin chose to keep D-035's 0.8
+rather than lower it after seeing the numbers: a floor moved to fit the model isn't a gate.
+Stage 5's challenger has to earn the first Approved version. If none can, that's a finding
+for Stage 6 and 8, and a decision to take then.
+**First run (2026-09-30, `wm2m10zouect`):** Validate 89 s, Train 249 s, Evaluate 114 s billed,
+about $0.028; every job tagged. Gate outcome False, `Rejected` failed the run with "got:
+pr_auc 0.3273 recall_ratio 0.5484 min_group_lift 1.7121", and the group stayed empty. Every
+number matches the local check. Before it, `scripts/approve.py separation` had IAM's
+simulator return `explicitDeny` for the training role and `allowed` for the approver.
+**Why:** a registry is only governance if something can stop a model getting into it, and
+someone other than the trainer decides what leaves it. On a one-person project the approver
+is still the same person in a different role; the article says so.
+**Cost:** $0. A model package group bills nothing, and the gate is two small JSON reads.
+
 ## D-040 — The Stage 3 pipeline is plain JSON, three Processing steps, cached by code hash and snapshot date
 
 **Status:** Accepted (2026-09-29).
@@ -171,7 +222,8 @@ expiry). Tested in `tests/test_socrata_pull.py` with a fake S3.
 
 ## D-035 — The promotion gate includes a fairness check across City sectors
 
-**Status:** Accepted (2026-09-23). `src/promote/fairness.py` scores the evaluation
+**Status:** Accepted (2026-09-23). Amended by D-041: srg `N/A` and `FUTURE` are reported, not
+gated, and the Stage 2 model fails the check. `src/promote/fairness.py` scores the evaluation
 predictions at the triage operating point: the top decile, with one city-wide cutoff. It
 compares groups of communities, the City's 8 planning `sector`s and the `srg` class
 (ESTABLISHED / DEVELOPING / …). Both come from Community District Boundaries

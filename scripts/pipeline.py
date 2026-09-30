@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create or update the Stage 3 training pipeline, run it, and report each step.
+"""Create or update the training pipeline, run it, and report each step (Stages 3-4).
 
     ROLE=$(terraform -chdir=infra output -raw sagemaker_role_arn)
     uv run python scripts/pipeline.py --role-arn "$ROLE"                  # full run
@@ -10,7 +10,8 @@ A run uploads src/ to s3://$MLOPS_BUCKET/code/<content hash>/ (unchanged code ke
 location, so cached steps stay cached), creates or updates the pipeline from
 src/pipeline/definition.py, starts it, and waits. Ctrl+C stops the run. At the end it
 prints each step's status, whether it came from the cache, its billed time, the cost tag
-on its job, the log of any failed step, and evaluation.json.
+on its job, the log of any failed step, the gate's decision, and the two reports.
+A run the gate rejects ends Failed; that's the gate working, and it says so.
 
 --show prints the definition and makes no AWS calls.
 """
@@ -39,8 +40,10 @@ from src.common.sm_jobs import (  # noqa: E402
     xgboost_image,
 )
 from src.pipeline.definition import build_definition  # noqa: E402
+from src.promote.fairness import summary_lines  # noqa: E402
 
 DONE = ("Succeeded", "Failed", "Stopped")
+DESCRIPTION = "validate -> train -> evaluate -> gate -> register for approval (D-039, D-041)"
 
 
 def pipeline_name(project: str) -> str:
@@ -75,12 +78,17 @@ def upsert_pipeline(sm, name: str, definition: dict, role_arn: str) -> str:
         sm.create_pipeline(
             PipelineName=name,
             PipelineDefinition=body,
-            PipelineDescription="Stage 3: validate -> train -> evaluate (Processing steps, D-039)",
+            PipelineDescription=DESCRIPTION,
             RoleArn=role_arn,
             Tags=aws_tags(),  # the pipeline passes its tags on to every job it starts
         )
         return "created"
-    sm.update_pipeline(PipelineName=name, PipelineDefinition=body, RoleArn=role_arn)
+    sm.update_pipeline(
+        PipelineName=name,
+        PipelineDefinition=body,
+        PipelineDescription=DESCRIPTION,
+        RoleArn=role_arn,
+    )
     return "updated"
 
 
@@ -129,6 +137,13 @@ def step_report(sm, steps: list[dict], project: str, instance_type: str) -> list
         }
         if s.get("FailureReason"):
             row["failure_reason"] = s["FailureReason"]
+        meta = s.get("Metadata", {})
+        if "Condition" in meta:
+            row["outcome"] = meta["Condition"].get("Outcome")
+        if "RegisterModel" in meta:
+            row["model_package"] = meta["RegisterModel"].get("Arn")
+        if "Fail" in meta:
+            row["reason"] = meta["Fail"].get("ErrorMessage")
         if job_arn and not row["cached"]:
             desc = sm.describe_processing_job(ProcessingJobName=row["job"])
             start, end = desc.get("ProcessingStartTime"), desc.get("ProcessingEndTime")
@@ -141,11 +156,22 @@ def step_report(sm, steps: list[dict], project: str, instance_type: str) -> list
     return rows
 
 
-def read_evaluation(sm, s3, job_name: str) -> dict:
+def read_report(sm, s3, job_name: str, file: str) -> dict:
     desc = sm.describe_processing_job(ProcessingJobName=job_name)
     uri = desc["ProcessingOutputConfig"]["Outputs"][0]["S3Output"]["S3Uri"].rstrip("/")
     bucket, key = uri.removeprefix("s3://").split("/", 1)
-    return json.loads(s3.get_object(Bucket=bucket, Key=f"{key}/evaluation.json")["Body"].read())
+    return json.loads(s3.get_object(Bucket=bucket, Key=f"{key}/{file}")["Body"].read())
+
+
+def verdict(status: str, rows: list[dict]) -> str:
+    """What the run means, in one line: a gate rejection isn't a broken pipeline."""
+    gate = next((r for r in rows if r["step"] == "Gate"), None)
+    if status == "Succeeded" and gate and gate.get("outcome") == "True":
+        package = next((r.get("model_package") for r in rows if r["step"] == "Register"), None)
+        return f"PASSED the gate; registered {package} as PendingManualApproval"
+    if gate and gate.get("outcome") == "False":
+        return "REJECTED by the gate; nothing was registered"
+    return f"run {status} before the gate decided"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -206,7 +232,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     rows = step_report(sm, list_steps(sm, arn), cfg.project, args.instance_type)
-    print(f"\nrun {status}")
+    print(f"\nrun {status}: {verdict(status, rows)}")
     for r in rows:
         print("  " + json.dumps(r))
     billed = sum(r.get("usd", 0.0) for r in rows)
@@ -220,8 +246,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"\n{r['step']} log:")
             print_job_log(logs, r["job"])
     evaluate = next((r for r in rows if r["step"] == "Evaluate" and r["job"]), None)
-    if status == "Succeeded" and evaluate:
-        print(json.dumps(read_evaluation(sm, s3, evaluate["job"]), indent=2))
+    if evaluate and evaluate["status"] == "Succeeded":
+        print(json.dumps(read_report(sm, s3, evaluate["job"], "evaluation.json"), indent=2))
+        print("\n".join(summary_lines(read_report(sm, s3, evaluate["job"], "fairness.json"))))
     return 0 if status == "Succeeded" else 1
 
 

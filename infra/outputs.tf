@@ -46,3 +46,12 @@ output "budget_denyall_arn" {
   description = "Policy the Budgets action attaches at the hard-stop threshold; detach to resume."
   value       = aws_iam_policy.budget_denyall.arn
 }
+
+output "model_package_group" {
+  value = aws_sagemaker_model_package_group.breach_risk.model_package_group_name
+}
+
+output "approver_role_arn" {
+  description = "Assume this role to approve or reject a model version (scripts/approve.py)."
+  value       = aws_iam_role.approver.arn
+}

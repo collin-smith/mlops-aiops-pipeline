@@ -12,7 +12,8 @@ resource "aws_iam_role" "sagemaker" {
   })
 }
 
-# Deliberately NOT AmazonSageMakerFullAccess. Scoped to job-based compute only —
+# Deliberately NOT AmazonSageMakerFullAccess. It can register a model but never approve one
+# (registry.tf denies it, D-041). Scoped to job-based compute only —
 # there is no CreateEndpoint / CreateEndpointConfig here, on purpose (D-007; ci.yml also
 # greps for it). The one Stage 6 Serverless demo runs under the operator's credentials
 # and uses this role only as the model's execution role (D-029).
@@ -32,7 +33,6 @@ resource "aws_iam_role_policy" "sagemaker" {
           "sagemaker:CreateModel",
           "sagemaker:CreateModelPackage",
           "sagemaker:CreateModelPackageGroup",
-          "sagemaker:UpdateModelPackage",
           "sagemaker:CreatePipeline",
           "sagemaker:UpdatePipeline",
           "sagemaker:StartPipelineExecution",
@@ -138,7 +138,8 @@ resource "aws_iam_role_policy" "github_actions" {
     Statement = [
       {
         Effect   = "Allow"
-        Action   = ["sagemaker:StartPipelineExecution", "sagemaker:Describe*", "sagemaker:List*", "sagemaker:UpdateModelPackage", "sagemaker:Search"]
+        # no UpdateModelPackage: CI can start a run but not approve its model (D-041)
+        Action   = ["sagemaker:StartPipelineExecution", "sagemaker:Describe*", "sagemaker:List*", "sagemaker:Search"]
         Resource = "*"
       },
       {
