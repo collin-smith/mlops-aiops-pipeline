@@ -137,8 +137,8 @@ resource "aws_iam_role_policy" "github_actions" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect   = "Allow"
         # no UpdateModelPackage: CI can start a run but not approve its model (D-041)
+        Effect   = "Allow"
         Action   = ["sagemaker:StartPipelineExecution", "sagemaker:Describe*", "sagemaker:List*", "sagemaker:Search"]
         Resource = "*"
       },
