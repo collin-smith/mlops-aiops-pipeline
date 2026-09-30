@@ -28,6 +28,7 @@ from __future__ import annotations
 import html
 import pathlib
 import xml.etree.ElementTree as ET
+from itertools import pairwise
 
 # The tables below are hand-aligned for readability; keep ruff format off them.
 # fmt: off
@@ -100,8 +101,9 @@ _BOX_MARK = {
 
 # key -> (label, sub, cat, _unused_, x, y, stage-introduced)
 NODES: dict[str, tuple] = {
-    "socrata":    ("Calgary 311", "Socrata API", "external", "mxgraph.aws4.internet_alt1", 20, 130, 1),
-    "pull":       ("socrata_pull.py", "local · pull→Parquet", "external", "mxgraph.aws4.command_line_interface", 20, 210, 1),
+    "socrata":    ("Calgary 311", "Socrata API", "external", "mxgraph.aws4.internet_alt1", 20, 120, 1),
+    # y=202 puts pull's lower port level with s3_proc's, so that edge runs straight
+    "pull":       ("socrata_pull.py", "local · pull→Parquet", "external", "mxgraph.aws4.command_line_interface", 20, 202, 1),
     "gha":        ("GitHub Actions", "scheduled retrain", "external", "mxgraph.aws4.git", 20, 470, 5),
     "drift":      ("inject_drift.py", "local · synthetic drift", "external", "mxgraph.aws4.command_line_interface", 20, 560, 7),
     "s3_raw":     ("S3  raw/", "asof=YYYY-MM-DD", "storage", "mxgraph.aws4.s3", 250, 120, 1),
@@ -112,8 +114,10 @@ NODES: dict[str, tuple] = {
     "glue":       ("AWS Glue", "Catalog + Crawler", "analytics", "mxgraph.aws4.glue", 490, 200, 1),
     "athena":     ("Amazon Athena", "2 GB scan cap", "analytics", "mxgraph.aws4.athena", 730, 200, 1),
     "cond":       ("Condition step", "PR-AUC ≥ floor", "security", "mxgraph.aws4.sagemaker", 970, 200, 4),
-    "ecr":        ("Amazon ECR", "XGBoost image", "compute", "mxgraph.aws4.elastic_container_registry", 490, 290, 2),
-    "sm_proc":    ("SageMaker Processing", "split / evaluate", "ml", "mxgraph.aws4.sagemaker", 970, 290, 3),
+    # ECR sits right of the training job so train -> model-artifacts has a clear run left;
+    # sm_proc moved up a row to make room (Stage 3 layout gets revisited when drafted)
+    "ecr":        ("Amazon ECR", "XGBoost image", "compute", "mxgraph.aws4.elastic_container_registry", 970, 290, 2),
+    "sm_proc":    ("SageMaker Processing", "split / evaluate", "ml", "mxgraph.aws4.sagemaker", 970, 120, 3),
     # D-039: no Training Job quota, so the model trains in a Processing job
     "sm_train":   ("SageMaker Processing", "train · XGBoost · t3.xlarge", "ml", "mxgraph.aws4.sagemaker", 730, 290, 2),
     "registry":   ("SageMaker Model Registry", "Model Package Group", "ml", "mxgraph.aws4.sagemaker", 1210, 120, 4),
@@ -170,6 +174,21 @@ EDGES: list[tuple] = [
     ("cwmetric", "anomaly", "", 7, False),
     ("anomaly", "sns", "anomaly alarm", 7, False),
 ]
+
+# draw.io only: edges whose automatic route would cross an icon or a label.
+# (a, b) -> (port style, waypoints(pos) or None); pos(key) -> (x, y) of that node on the page.
+# Unlisted edges get _default_ports(). Ports at exitY/entryY=0.85 keep horizontal runs below
+# the top-aligned labels.
+_LOW = "exitX=1;exitY=0.85;entryX=0;entryY=0.85;"
+EDGE_ROUTES: dict[tuple, tuple] = {
+    ("pull", "s3_raw"):     (_LOW, lambda p: [(210, p("pull")[1] + 39), (210, p("s3_raw")[1] + 41)]),
+    ("pull", "s3_proc"):    (_LOW, None),
+    # down into the lane between rows, along it, then into the top of the training job
+    ("s3_proc", "sm_train"): ("exitX=0.85;exitY=1;entryX=0.5;entryY=0;", lambda p: [
+        (p("s3_proc")[0] + 41, (p("s3_proc")[1] + 48 + p("sm_train")[1]) / 2),
+        (p("sm_train")[0] + 24, (p("s3_proc")[1] + 48 + p("sm_train")[1]) / 2),
+    ]),
+}
 
 STAGE_NAMES = {
     1: "The Question & the Data",
@@ -487,7 +506,9 @@ def _box_style(cat: str) -> str:
     )
 
 
-def _drawio_page(model, nodes, groups, edges, title, note, *, keep=None, accent_stage=None):
+def _drawio_page(
+    model, nodes, groups, edges, title, note, *, keep=None, accent_stage=None, routed=False
+):
     root = ET.SubElement(model, "root")
     ET.SubElement(root, "mxCell", {"id": "0"})
     ET.SubElement(root, "mxCell", {"id": "1", "parent": "0"})
@@ -591,17 +612,25 @@ def _drawio_page(model, nodes, groups, edges, title, note, *, keep=None, accent_
                 "parent": "1",
                 "vertex": "1",
                 "value": lbl,
-                "style": "text;html=1;align=left;verticalAlign=middle;fontSize=11;spacing=2;",
+                "style": "text;html=1;align=left;verticalAlign=top;fontSize=11;spacing=2;",
             },
-        ).append(_geo(x + 56, y - 3, 200, 54))
+        ).append(_geo(x + 56, y - 3, 200, 40))
+
+    def pos(k):
+        return nodes[k][4], nodes[k][5]
 
     for j, e in enumerate(edges):
         a, b = e[0], e[1]
         if keep is not None and (a not in keep or b not in keep):
             continue
+        ports, pts = (
+            EDGE_ROUTES.get((a, b), (_default_ports(a, b, nodes), None)) if routed else ("", None)
+        )
         style = (
             "edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=9;endArrow=block;"
-            "labelBackgroundColor=#FFFFFF;strokeColor=#8893A8;" + ("dashed=1;" if e[-1] else "")
+            "labelBackgroundColor=#FFFFFF;strokeColor=#8893A8;"
+            + ("dashed=1;" if e[-1] else "")
+            + ports
         )
         ec = ET.SubElement(
             root,
@@ -616,7 +645,11 @@ def _drawio_page(model, nodes, groups, edges, title, note, *, keep=None, accent_
                 "style": style,
             },
         )
-        ec.append(ET.Element("mxGeometry", {"relative": "1", "as": "geometry"}))
+        geo = ET.SubElement(ec, "mxGeometry", {"relative": "1", "as": "geometry"})
+        if pts:
+            arr = ET.SubElement(geo, "Array", {"as": "points"})
+            for px, py in pts(pos):
+                ET.SubElement(arr, "mxPoint", {"x": str(int(px)), "y": str(int(py))})
 
     ny = max(g[2] + g[4] for g in groups) + 22
     ET.SubElement(
@@ -637,6 +670,52 @@ def _geo(x, y, w, h):
         "mxGeometry",
         {"x": str(int(x)), "y": str(int(y)), "width": str(w), "height": str(h), "as": "geometry"},
     )
+
+
+ROWS = [120, 200, 290, 380, 470, 560]  # the main diagram's row grid
+
+
+def _row(y):
+    return min(range(len(ROWS)), key=lambda i: abs(ROWS[i] - y))
+
+
+def _default_ports(a, b, nodes):
+    """Same row: run along the icons' lower edge, under the labels. Same column: bottom to top."""
+    (ax, ay), (bx, by) = nodes[a][4:6], nodes[b][4:6]
+    if _row(ay) == _row(by):
+        return _LOW if bx > ax else "exitX=0;exitY=0.85;entryX=1;entryY=0.85;"
+    if ax == bx:
+        return (
+            "exitX=0.5;exitY=1;entryX=0.5;entryY=0;"
+            if by > ay
+            else "exitX=0.5;exitY=0;entryX=0.5;entryY=1;"
+        )
+    return ""
+
+
+def _compact(nodes, keep):
+    """Close up rows a stage page doesn't use, so early stages have no empty band."""
+    used = sorted({_row(nodes[k][5]) for k in keep})
+    base = {used[0]: ROWS[used[0]]}
+    for prev, cur in pairwise(used):
+        base[cur] = base[prev] + (ROWS[cur] - ROWS[prev] if cur == prev + 1 else 90)
+    out = {}
+    for k, n in nodes.items():
+        r = _row(n[5])
+        out[k] = n[:5] + (n[5] - ROWS[r] + base.get(r, ROWS[r]),) + n[6:]
+    return out
+
+
+def _fit_groups(nodes, keep):
+    """AWS Cloud and Region frames sized to the AWS nodes on the page."""
+    inner = [k for k in keep if nodes[k][4] > 100]  # the external column sits outside
+    right = max(nodes[k][4] for k in inner) + 242
+    bottom = max(nodes[k][5] for k in inner) + 84
+    rw, rh = right - 222, bottom - 92
+    return [
+        ("c", 196, 70, rw + 50, rh + 52, "AWS Cloud", "#232F3E", 0),
+        ("r", 222, 92, rw, rh, "Region  ca-central-1", "#00A4A6", 1),
+    ]
 
 
 def _mxfile(pages):
@@ -668,10 +747,8 @@ def _mxfile(pages):
         else:
             s = stage
             keep = None if kind == "full" else {k for k, v in NODES.items() if v[6] <= s}
-            groups = [
-                ("c", 196, 70, 1520, 628, "AWS Cloud", "#232F3E", 0),
-                ("r", 222, 92, 1470, 576, "Region  ca-central-1", "#00A4A6", 1),
-            ]
+            nodes = NODES if keep is None else _compact(NODES, keep)
+            groups = _fit_groups(nodes, keep if keep is not None else set(nodes))
             title = (
                 "Full architecture — MLOps + AIOps pipeline on AWS (Calgary 311)"
                 if kind == "full"
@@ -680,7 +757,9 @@ def _mxfile(pages):
             # accent the delta only from Stage 2 on (Stage 1 is entirely new — no signal)
             acc = s if (s and s > 1) else None
             note = NOTE_MAIN + ("   Pink ring + label = introduced in this stage." if acc else "")
-            _drawio_page(m, NODES, groups, EDGES, title, note, keep=keep, accent_stage=acc)
+            _drawio_page(
+                m, nodes, groups, EDGES, title, note, keep=keep, accent_stage=acc, routed=True
+            )
     return ET.ElementTree(f)
 
 
