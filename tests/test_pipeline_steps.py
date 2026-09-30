@@ -1,67 +1,106 @@
 """Pipeline-step smoke tests — Stage 3 (D-016).
 
-These run the Processing-step *entrypoints* (`preprocess`, `evaluate`) against a tiny
-local fixture with **no AWS calls and no SageMaker**, to catch path / shape / I/O-contract
-breaks before a $-costing pipeline run. They are skipped until Stage 3 lands the
-entrypoints; the import guard keeps CI green in the meantime.
-
-Run: `pytest tests/test_pipeline_steps.py`
+These run the step code against a tiny local fixture with no AWS calls, to catch path,
+shape and I/O-contract breaks before a pipeline run that costs money. The end-to-end
+test needs xgboost and scikit-learn (the `ml` extra) and skips without them.
 """
 
 from __future__ import annotations
 
-import importlib.util
+import json
+import sys
+import types
 
+import pandas as pd
 import pytest
 
-_HAS_PREPROCESS = importlib.util.find_spec("src.pipeline.preprocess") is not None
-pytestmark = pytest.mark.skipif(
-    not _HAS_PREPROCESS, reason="Stage 3 pipeline entrypoints not implemented yet"
-)
+from src.features.build_features import align_to_schema
+from src.pipeline import evaluate, step
 
 
-def test_preprocess_writes_train_and_test(tmp_path, requests_frame):
-    """preprocess.main() reads raw Parquet from an input dir and writes
-    train.csv / test.csv to an output dir, with the label column present and no
-    leaky columns."""
-    from src.features.build_labels import LEAKY_COLUMNS
-    from src.pipeline import preprocess
+def test_train_then_evaluate_reproduces_training_metrics(tmp_path, requests_frame):
+    """The artifact alone gives the numbers training recorded: nothing it needs is missing."""
+    pytest.importorskip("xgboost")
+    pytest.importorskip("sklearn")
+    from src.pipeline import train
 
-    in_dir = tmp_path / "input"
-    out_dir = tmp_path / "output"
-    in_dir.mkdir()
-    out_dir.mkdir()
-    requests_frame.to_parquet(in_dir / "part-0.parquet")
+    data, model, out = tmp_path / "data", tmp_path / "model", tmp_path / "eval"
+    data.mkdir()
+    requests_frame.to_parquet(data / "part-0.parquet")
+    assert train.main(["--data", str(data), "--out", str(model)]) == 0
+    assert evaluate.main(["--model", str(model), "--data", str(data), "--out", str(out)]) == 0
 
-    preprocess.main(["--input", str(in_dir), "--output", str(out_dir)])
-
-    import pandas as pd
-
-    train = pd.read_csv(out_dir / "train.csv")
-    test = pd.read_csv(out_dir / "test.csv")
-    assert "breach" in train.columns
-    assert len(train) and len(test)
-    assert not (set(train.columns) & (set(LEAKY_COLUMNS) - {"breach"}))
+    report = json.loads((out / evaluate.REPORT_NAME).read_text())
+    assert report["matches_training"] is True
+    # the path the Stage 4 condition step reads
+    assert 0 <= report["binary_classification_metrics"]["pr_auc"]["value"] <= 1
+    assert report["n_test"] > 0
 
 
-def test_evaluate_emits_metric_json(tmp_path):
-    """evaluate.main() writes evaluation.json with the metric path the Stage 4
-    ConditionStep reads (`binary_classification_metrics.pr_auc.value`)."""
-    import json
-
-    from src.pipeline import evaluate
-
-    # a trivially-perfect prediction file so the numbers are deterministic
-    (tmp_path / "test").mkdir()
-    (tmp_path / "model").mkdir()
-    (tmp_path / "out").mkdir()
-    import pandas as pd
-
-    pd.DataFrame({"breach": [0, 1, 0, 1], "pred": [0.1, 0.9, 0.2, 0.8]}).to_csv(
-        tmp_path / "test" / "predictions.csv", index=False
+def test_report_flags_an_artifact_that_disagrees_with_training():
+    metrics = {"roc_auc": 0.66, "pr_auc": 0.33, "top_decile_lift": 2.04, "n_test": 10}
+    same = evaluate.build_report(
+        metrics, {"roc_auc": 0.66, "pr_auc": 0.33, "top_decile_lift": 2.04}
     )
+    assert same["matches_training"] is True
+    off = evaluate.build_report(metrics, {"roc_auc": 0.70, "pr_auc": 0.33, "top_decile_lift": 2.04})
+    assert off["matches_training"] is False
+    assert off["difference_from_training"]["roc_auc"] == pytest.approx(0.04)
+    assert "matches_training" not in evaluate.build_report(metrics, None)
 
-    evaluate.main(["--predictions", str(tmp_path / "test"), "--output", str(tmp_path / "out")])
 
-    report = json.loads((tmp_path / "out" / "evaluation.json").read_text())
-    assert report["binary_classification_metrics"]["pr_auc"]["value"] > 0.5
+def test_align_to_schema_orders_columns_and_uses_training_levels():
+    schema = {
+        "columns": ["req_month", "service_name"],
+        "categories": {"service_name": ["Pothole", "Tree"]},
+    }
+    features = pd.DataFrame(
+        {"service_name": pd.Categorical(["Tree", "Graffiti"]), "req_month": [1, 2], "extra": [0, 0]}
+    )
+    out = align_to_schema(features, schema)
+    assert list(out.columns) == ["req_month", "service_name"]
+    assert list(out["service_name"].cat.categories) == ["Pothole", "Tree"]
+    assert out["service_name"].cat.codes.tolist() == [1, -1]  # an unseen level is missing
+
+
+def _fake_step(monkeypatch, body):
+    mod = types.ModuleType("fake_step")
+    mod.main = body
+    monkeypatch.setitem(sys.modules, "fake_step", mod)
+    monkeypatch.setitem(step.STEPS, "fake", "fake_step")
+    from src.common import metrics
+
+    monkeypatch.setattr(metrics, "_DISABLED", True)  # log the metrics, don't send them
+
+
+def test_step_runner_passes_arguments_and_exits_zero(monkeypatch):
+    seen = []
+    _fake_step(monkeypatch, lambda argv: seen.append(argv))
+    assert step.main(["fake", "--x", "1"]) == 0
+    assert seen == [["--x", "1"]]
+
+
+def test_step_runner_turns_a_failure_into_a_nonzero_exit(monkeypatch):
+    def boom(argv):
+        raise RuntimeError("bad data")
+
+    _fake_step(monkeypatch, boom)
+    assert step.main(["fake"]) == 1
+
+
+def test_step_runner_still_succeeds_when_metrics_cannot_be_sent(monkeypatch):
+    from src.common import metrics
+
+    _fake_step(monkeypatch, lambda argv: None)
+
+    def denied(*a, **kw):
+        raise PermissionError("AccessDenied: cloudwatch:PutMetricData")
+
+    monkeypatch.setattr(metrics, "emit_run_metric", denied)
+    assert step.main(["fake"]) == 0
+
+
+def test_step_runner_knows_the_three_steps():
+    assert set(step.STEPS) >= {"validate", "train", "evaluate"}
+    with pytest.raises(SystemExit):
+        step.main(["nope"])

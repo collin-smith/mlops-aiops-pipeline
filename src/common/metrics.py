@@ -26,6 +26,8 @@ INSTANCE_HOURLY_USD = {
     "ml.m5.large": 0.115,
     "ml.m5.xlarge": 0.230,
     "ml.t3.medium": 0.050,
+    "ml.t3.large": 0.110,
+    "ml.t3.xlarge": 0.220,  # the Processing quota's instances (D-039)
     "glue.dpu": 0.44,  # per DPU-hour
 }
 
@@ -123,5 +125,10 @@ class timed_stage:
 
     def __exit__(self, exc_type, exc, tb) -> None:
         seconds = datetime.now(UTC).timestamp() - self._start
-        emit_run_metric("StepFailure", 1.0 if exc_type else 0.0, stage=self.stage)
-        emit_cost_estimate(self.instance_type, seconds, stage=self.stage, spot=self.spot)
+        # Telemetry never fails the work it measures: a missing permission or a CloudWatch
+        # hiccup is logged, and the step's own result stands.
+        try:
+            emit_run_metric("StepFailure", 1.0 if exc_type else 0.0, stage=self.stage)
+            emit_cost_estimate(self.instance_type, seconds, stage=self.stage, spot=self.spot)
+        except Exception as e:
+            log.warning("could not emit run metrics for %s: %s", self.stage, e)

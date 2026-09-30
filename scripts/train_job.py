@@ -28,6 +28,8 @@ from src.common.config import aws_tags, get_config  # noqa: E402
 from src.common.guards import budget_hardstop_active  # noqa: E402
 from src.common.sm_jobs import (  # noqa: E402
     PROCESSING_INSTANCE_TYPES,
+    REQUIREMENTS,
+    code_files,
     job_name,
     print_job_log,
     summarize,
@@ -39,18 +41,6 @@ from src.common.sm_jobs import (  # noqa: E402
 IN_CODE = "/opt/ml/processing/input/code"
 IN_DATA = "/opt/ml/processing/input/data"
 OUT = "/opt/ml/processing/output"
-REQUIREMENTS = "src/pipeline/job_requirements.txt"
-
-
-def code_files(root: Path = ROOT) -> dict[str, Path]:
-    """src/ as the job needs it: every .py file plus the job requirements, no caches."""
-    files = {
-        str(p.relative_to(root)): p
-        for p in sorted((root / "src").rglob("*.py"))
-        if "__pycache__" not in p.parts
-    }
-    files[REQUIREMENTS] = root / REQUIREMENTS
-    return files
 
 
 def entrypoint(max_train_rows: int) -> list[str]:

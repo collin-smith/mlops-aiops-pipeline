@@ -35,7 +35,7 @@ Frames the civic question up front before touching AWS. Pulls 5 years of Calgary
 Notebook exploration surfaces the seasonal patterns hiding in the data and builds a leakage-guarded, per-category breach label. Trains a first XGBoost model on a SageMaker Training Job and reports honest baseline metrics — modest but real predictive signal, not an inflated accuracy claim.
 
 **3. A model that only works when I run it by hand isn't a pipeline — turning Calgary's 311 triage model into a SageMaker Pipelines DAG** *(From Notebook to Pipeline)* — _pending_
-Turns the Stage 2 notebook into a real SageMaker Pipelines DAG (preprocess → train → evaluate), with parameterized, cacheable re-runs instead of hand-run scripts. Starts emitting operational metrics to CloudWatch that Stage 7's anomaly detector will later consume.
+Turns the Stage 2 notebook into a real SageMaker Pipelines DAG (validate → train → evaluate), with parameterized, cacheable re-runs instead of hand-run scripts. Starts emitting operational metrics to CloudWatch that Stage 7's anomaly detector will later consume.
 
 **4. Whose Calgary 311 request waits? — a governance gate with the SageMaker Model Registry** *(Model Registry & Governance Gate)* — _pending_
 Adds a Model Registry with a metric-threshold condition step, so only models that clear a PR-AUC bar get registered. A separate IAM "approver" identity gates final approval — an explicit, documented separation of duties, not just a metric check.
@@ -49,7 +49,7 @@ Deploys the approved model via SageMaker Batch Transform to score today's open 3
 **7. If a Calgary snowstorm breaks the model and nobody notices for a week, did governance even happen? — SageMaker Model Monitor + a pipeline-health anomaly detector (AIOps)** *(Watching the Watcher)* — _pending_
 Two AIOps layers: SageMaker Model Monitor catching data drift on the model's inputs (framed as "citizen-feedback drift detection" — distinguishing an expected seasonal shift from a genuine new pattern in what residents are reporting), and a separate anomaly detector watching the pipeline's own health metrics. This is the layer most MLOps monitoring setups skip entirely, and the piece that makes the AIOps claim real rather than aspirational.
 
-**8. What five years of Calgary 311 data said — and what the whole SageMaker pipeline cost to run** *(The Findings & the Pitch)* — _pending_
+**8. What nearly six years of Calgary 311 data said — and what the whole SageMaker pipeline cost to run** *(The Findings & the Pitch)* — _pending_
 Synthesizes the civic insight (who waits longest and why), the final model numbers, total AWS spend against the cap, and an 8–10 item "failures you'll actually hit" retrospective. Closes with a narrative-only business pitch to a municipal 311 operations manager, explicitly disclaimed as no real business formed — genuinely useful directional intelligence, not a vetted policy recommendation.
 
 Reference docs: [`docs/decisions.md`](docs/decisions.md) (locked decisions, ADR-lite),

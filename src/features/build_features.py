@@ -116,3 +116,17 @@ def align_categories(features: pd.DataFrame, reference: pd.DataFrame) -> pd.Data
         levels = reference[c].cat.categories
         out[c] = pd.Categorical(out[c].where(out[c].isin(levels)), categories=levels)
     return out
+
+
+def align_to_schema(features: pd.DataFrame, schema: dict) -> pd.DataFrame:
+    """``align_categories`` for a saved model: ``schema`` is its ``feature_schema.json``.
+
+    Puts the columns in training order and gives each categorical column the training
+    levels, in the same order, so the category codes XGBoost sees match the ones it
+    learned. Anything scoring or evaluating a model artifact goes through this.
+    """
+    out = features[schema["columns"]].copy()
+    for c, levels in schema["categories"].items():
+        values = out[c].astype("string")
+        out[c] = pd.Categorical(values.where(values.isin(levels)), categories=levels)
+    return out

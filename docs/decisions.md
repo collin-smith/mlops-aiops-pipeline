@@ -5,6 +5,44 @@ ADR-lite. Newest first. Seeded from the planning docs
 
 ---
 
+## D-040 — The Stage 3 pipeline is plain JSON, three Processing steps, cached by code hash and snapshot date
+
+**Status:** Accepted (2026-09-29).
+
+**Decision:**
+- The pipeline is `validate → train → evaluate`, three Processing steps (D-039), defined in
+  `src/pipeline/definition.py` as a plain Pipelines definition (schema 2020-12-01) with no
+  SageMaker SDK. `scripts/pipeline.py` creates or updates it (`<project>-train`) and starts
+  runs. The pipeline itself is not in Terraform: D-014 already keeps the definition in Python,
+  and a pipeline bills nothing while idle. Its role is Terraform's `…-sagemaker`.
+- **Validate runs first** (D-034). A failed check stops the run before any training spend.
+- **Evaluate reloads the artifact.** It unpacks `model.tar.gz`, rebuilds the test year, shapes
+  it with `feature_schema.json` (as Stage 6 scoring will) and scores it with the saved
+  booster. If its ROC-AUC, PR-AUC or lift differ from training's `metrics.json` by more than
+  0.001, the step fails: something the model needs didn't make it into the artifact. Its
+  `evaluation.json` uses the `binary_classification_metrics.<name>.value` layout the Stage 4
+  condition step reads. Checked locally on the full data: 0.6617 / 0.3273 / 2.036×, identical.
+- **Caching:** on, 30 days. A Processing step's cache key is its container command, its
+  environment and its input *locations*, not the bytes behind them. So `src/` is uploaded to
+  `code/<sha256 of the files, 12 chars>/` (changed code, new location, a re-run), and the
+  snapshot date is in every step's environment as `MLOPS_ASOF` (a new snapshot re-runs
+  everything, although `processed/311/` keeps the same address, D-036).
+- Every step runs through `src/pipeline/step.py`, which wraps it in `timed_stage`: each run
+  emits `StepFailure`, `RunDurationSeconds` and `RunCostUsd` per step to `MLOpsAIOps/Pipeline`.
+  Telemetry that fails to send is logged and never fails the step.
+- Cost tags: the pipeline carries the `project` tag, and Pipelines copies a pipeline's tags to
+  the jobs it starts. The launcher checks each job's tags after the run and warns if one is
+  missing.
+**Why no SDK:** the locked SDK is v3, a rewrite; the launchers already avoid it (D-039), and
+its install is several GB. A hand-written definition is about 200 lines, is testable as data
+(`tests/test_pipeline_definition.py`), and is exactly what the console shows.
+**Cost:** one full run is about 3 job start-ups plus about 6 minutes of ml.t3.xlarge compute,
+roughly $0.03. A fully cached re-run costs nothing but the API calls.
+**First runs (2026-09-29):** run `clk3bbv23tm2` Succeeded in about 10 minutes: Validate 89 s,
+Train 249 s, Evaluate 94 s billed, about $0.026. Every job carried the `project` tag. Evaluate
+matched training exactly (ROC-AUC 0.6617, PR-AUC 0.3273, lift 2.036×). An identical second
+run (`x4jspzywfbrc`) was three cache hits in seconds, $0.00.
+
 ## D-039 — Training and batch scoring run as SageMaker Processing jobs on ml.t3 (amends D-006, D-007, D-008)
 
 **Status:** Accepted (2026-09-28). Collin, on the cost: "still relatively small". The first

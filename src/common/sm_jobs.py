@@ -21,6 +21,8 @@ _XGBOOST_REGISTRY = {"ca-central-1": "341280168497"}
 XGBOOST_VERSIONS = ("1.7-1", "3.2-0")
 
 TERMINAL = ("Completed", "Failed", "Stopped")
+ROOT = Path(__file__).resolve().parents[2]
+REQUIREMENTS = "src/pipeline/job_requirements.txt"
 LOG_GROUP = "/aws/sagemaker/ProcessingJobs"
 
 
@@ -36,6 +38,17 @@ def xgboost_image(region: str, version: str) -> str:
 def job_name(project: str, kind: str, now: datetime | None = None) -> str:
     stamp = (now or datetime.now(UTC)).strftime("%Y%m%d-%H%M%S")
     return f"{project}-{kind}-{stamp}"
+
+
+def code_files(root: Path = ROOT) -> dict[str, Path]:
+    """src/ as a job needs it: every .py file plus the job requirements, no caches."""
+    files = {
+        str(p.relative_to(root)): p
+        for p in sorted((root / "src").rglob("*.py"))
+        if "__pycache__" not in p.parts
+    }
+    files[REQUIREMENTS] = root / REQUIREMENTS
+    return files
 
 
 def upload_files(s3, bucket: str, prefix: str, files: dict[str, Path]) -> str:
