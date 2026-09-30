@@ -24,7 +24,7 @@ list (8 operational + 7 pipeline) under [Recommendations](#recommendations).
 
 | # | Problem the data shows | Proposed solution |
 |---|---|---|
-| **1** | **Resolution is reactive** — nothing at intake flags a request as likely to drag, so it isn't escalated until a resident calls back. | **Predictive triage at intake:** score each day's open requests, surface the top ~10% most likely to breach their category norm. In the exploratory model that shortlist is ~77% true-positive vs a 28% base rate — **2.8× lift**. Sub-dollar daily batch job; no real-time infra. |
+| **1** | **Resolution is reactive** — nothing at intake flags a request as likely to drag, so it isn't escalated until a resident calls back. | **Predictive triage at intake:** score each day's open requests, surface the top ~10% most likely to breach their category norm. On the full data that shortlist runs late 36.9% of the time vs 18.1% overall — **2.0× lift** (D-037; the exploratory sample showed 77% vs 28%, 2.8×). Sub-dollar daily batch job; no real-time infra. |
 | **2** | **Capacity is planned to an annual average, but demand isn't annual** — total volume swings 2× Dec→Jun and the category mix swings far harder (snow/ice ~20,000 in Jan → 3 in Jul; weeds the reverse). | **Forecast-driven seasonal capacity planning:** use the very stable per-category annual curves to pre-position crews/contractors 4–6 weeks ahead of each wave, with the 30-day backlog count as an in-season trigger. Needs only seasonal decomposition, not the model. |
 | **3** | **The data can't be trusted for management reporting** — `service_name` categories have drifted across department prefixes and back-end systems, and ~26,000 requests in 5 years are duplicate reports of the same issue. | **(a)** Canonical category taxonomy with a named owner + an alias map for historical rows. **(b)** Intake-time "similar open request nearby?" check (location + category + time window) — flags duplicates and doubles as a priority signal when the same problem is reported repeatedly. |
 
@@ -345,7 +345,7 @@ do, and what they mean for **this project**. The first group is narrative fuel f
 
 | # | Recommendation | Basis in the findings |
 |---|---|---|
-| 1 | **Predictive triage at intake** — flag the daily top-decile of open requests for proactive routing or a courtesy update. | Top-decile flag catches ~77% of eventual breaches vs a 28% base rate (2.8× lift). Sub-dollar batch job. |
+| 1 | **Predictive triage at intake** — flag the daily top-decile of open requests for proactive routing or a courtesy update. | On the full data, the model's top-decile flag runs late 36.9% of the time vs 18.1% overall (2.0× lift, D-037) and catches about 20% of eventual breaches. The exploratory sample showed 77% vs 28% (2.8×). Sub-dollar batch job. |
 | 2 | **Staff to the seasonal curve, not the annual average** — pre-position crews/contractors against the forecast. | Category mix swings 2× across the year; snow/ice, weeds, potholes have fixed, predictable annual shapes. Needs only seasonal decomposition, not ML. |
 | 3 | **Backlog-triggered escalation** — a plain threshold alert ("category backlog > X → add capacity"). | The 30-day category backlog is one of the few strong leading indicators of a breach. |
 | 4 | **Adopt a canonical `service_name` taxonomy with a named owner.** | Property-tax inquiries filed under two department prefixes; "tree concern" split across two back-end systems. Breaks longitudinal and cross-department reporting. |
