@@ -209,6 +209,45 @@ STEP_ROW_ROUTES: dict[tuple, tuple] = {
     ]),
     ("ecr", "sm_train"):     ("exitX=0.7;exitY=0;entryX=0.7;entryY=1;", None),
 }
+# Article views: one stage's change, at a size that reads in a ~700 px article column.
+# Positions are this view's own; edges are listed explicitly with their routes.
+_BOTTOM = "exitX=1;exitY=1;entryX=0;entryY=1;"  # along the icons' lower edge, under the labels
+_UP = "exitX=0.5;exitY=0;entryX=0.5;entryY=1;"
+ARTICLE_VIEWS = {
+    2: {
+        "nodes": {"s3_proc": (60, 120), "sm_train": (400, 120), "s3_model": (740, 120), "ecr": (400, 270)},
+        "edges": [
+            ("s3_proc", "sm_train", "Parquet", _BOTTOM, None),
+            ("sm_train", "s3_model", "model.tar.gz", _BOTTOM, None),
+            ("ecr", "sm_train", "image", _UP, None),
+        ],
+        "note": "Also in place since Stage 1, not shown: the Socrata pull, S3 raw/, Glue, Athena, IAM, "
+                "CloudWatch Logs, SNS, Budgets and Cost Explorer.",
+    },
+    3: {
+        "nodes": {
+            "sm_pipe": (60, 110), "cwmetric": (400, 110), "ecr": (740, 110),
+            "sm_proc": (60, 260), "sm_train": (400, 260), "sm_eval": (740, 260),
+            "s3_proc": (400, 420), "s3_model": (740, 420),
+        },
+        "edges": [
+            ("sm_pipe", "cwmetric", "run metrics", _BOTTOM, None),
+            ("sm_proc", "sm_train", "gate passed", _BOTTOM, None),
+            ("s3_proc", "sm_train", "", _UP, None),
+            ("s3_proc", "sm_proc", "Parquet", "exitX=0.2;exitY=0;entryX=0.5;entryY=1;",
+             lambda p: [(p("s3_proc")[0] + 10, 370), (p("sm_proc")[0] + 24, 370)]),
+            ("ecr", "sm_train", "", "exitX=0.5;exitY=1;entryX=0.5;entryY=0;",
+             lambda p: [(p("ecr")[0] + 24, 212), (p("sm_train")[0] + 24, 212)]),
+            ("sm_train", "s3_model", "model.tar.gz", "exitX=1;exitY=0.85;entryX=0;entryY=0.5;",
+             lambda p: [(700, p("sm_train")[1] + 41), (700, p("s3_model")[1] + 24)]),
+            ("s3_model", "sm_eval", "", _UP, None),
+        ],
+        "note": "Validate, Train and Evaluate all read processed/311 and run AWS's XGBoost image. "
+                "Also in place since Stage 1, not shown: the Socrata pull, S3 raw/, Glue, Athena, IAM, "
+                "CloudWatch Logs, SNS, Budgets and Cost Explorer.",
+    },
+}
+
 # node -> (last stage, (x, y)): where a node sat on the pages up to that stage
 EARLY_POS = {"ecr": (2, (970, 290))}
 
@@ -529,8 +568,24 @@ def _box_style(cat: str) -> str:
 
 
 def _drawio_page(
-    model, nodes, groups, edges, title, note, *, keep=None, accent_stage=None, routed=False
+    model,
+    nodes,
+    groups,
+    edges,
+    title,
+    note,
+    *,
+    keep=None,
+    accent_stage=None,
+    routed=False,
+    routes=None,
+    big=False,
 ):
+    """One draw.io page. ``routes`` replaces the main diagram's edge routes; ``big`` is the
+    article view's larger text (see ARTICLE_VIEWS)."""
+    name_px, sub_px, edge_px, title_px, note_px = (
+        (16, 13, 13, 20, 13) if big else (11, 9, 9, 15, 10)
+    )
     root = ET.SubElement(model, "root")
     ET.SubElement(root, "mxCell", {"id": "0"})
     ET.SubElement(root, "mxCell", {"id": "1", "parent": "0"})
@@ -542,9 +597,9 @@ def _drawio_page(
             "parent": "1",
             "vertex": "1",
             "value": title,
-            "style": "text;html=1;align=left;fontSize=15;fontStyle=1;",
+            "style": f"text;html=1;align=left;fontSize={title_px};fontStyle=1;",
         },
-    ).append(_geo(40, 16, 1400, 26))
+    ).append(_geo(40, 16, 1000 if big else 1400, 26))
 
     for i, g in enumerate(groups):
         _, x, y, w, h, label, stroke, dashed = g
@@ -624,7 +679,7 @@ def _drawio_page(
                 ).append(_geo(x + 30, y - 14, 30, 13))
         name_col = " color='#B02A5B'" if (new_here and BADGE != "none") else ""
         lbl = f"<b><font{name_col}>{n[0]}</font></b>" + (
-            f"<br><font style='font-size:9px' color='#5A6B86'>{n[1]}</font>" if n[1] else ""
+            f"<br><font style='font-size:{sub_px}px' color='#5A6B86'>{n[1]}</font>" if n[1] else ""
         )
         ET.SubElement(
             root,
@@ -634,9 +689,9 @@ def _drawio_page(
                 "parent": "1",
                 "vertex": "1",
                 "value": lbl,
-                "style": "text;html=1;align=left;verticalAlign=top;fontSize=11;spacing=2;",
+                "style": f"text;html=1;align=left;verticalAlign=top;fontSize={name_px};spacing=2;",
             },
-        ).append(_geo(x + 56, y - 3, 200, 40))
+        ).append(_geo(x + 56, y - 3, 300 if big else 200, 44 if big else 40))
 
     def pos(k):
         return nodes[k][4], nodes[k][5]
@@ -647,12 +702,15 @@ def _drawio_page(
         a, b = e[0], e[1]
         if keep is not None and (a not in keep or b not in keep):
             continue
-        routes = {**EDGE_ROUTES, **(STEP_ROW_ROUTES if "sm_proc" in visible else {})}
+        if routes is not None:
+            page_routes = routes
+        else:
+            page_routes = {**EDGE_ROUTES, **(STEP_ROW_ROUTES if "sm_proc" in visible else {})}
         ports, pts = (
-            routes.get((a, b), (_default_ports(a, b, nodes), None)) if routed else ("", None)
+            page_routes.get((a, b), (_default_ports(a, b, nodes), None)) if routed else ("", None)
         )
         style = (
-            "edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=9;endArrow=block;"
+            f"edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize={edge_px};endArrow=block;"
             "labelBackgroundColor=#FFFFFF;strokeColor=#8893A8;"
             + ("dashed=1;" if e[-1] else "")
             + ports
@@ -685,9 +743,9 @@ def _drawio_page(
             "parent": "1",
             "vertex": "1",
             "value": note,
-            "style": "text;html=1;align=left;fontSize=10;fontColor=#5A6B86;fontStyle=2;",
+            "style": f"text;html=1;align=left;whiteSpace=wrap;fontSize={note_px};fontColor=#5A6B86;fontStyle=2;",
         },
-    ).append(_geo(40, ny, 1500, 46))
+    ).append(_geo(40 if not big else 24, ny, 1000 if big else 1500, 46))
 
 
 def _geo(x, y, w, h):
@@ -750,6 +808,51 @@ def _fit_groups(nodes, keep):
         ("c", 196, 70, rw + 50, rh + 52, "AWS Cloud", "#232F3E", 0),
         ("r", 222, 92, rw, rh, "Region  ca-central-1", "#00A4A6", 1),
     ]
+
+
+def _article_view(stage: int) -> ET.ElementTree:
+    view = ARTICLE_VIEWS[stage]
+    nodes = {k: NODES[k][:4] + xy + NODES[k][6:] for k, xy in view["nodes"].items()}
+    xs = [x for x, _ in view["nodes"].values()]
+    ys = [y for _, y in view["nodes"].values()]
+    right, bottom = max(xs) + 300, max(ys) + 90
+    groups = [
+        ("c", 16, 58, right - 16, bottom - 58 + 20, "AWS Cloud", "#232F3E", 0),
+        ("r", 32, 76, right - 48, bottom - 76, "Region  ca-central-1", "#00A4A6", 1),
+    ]
+    edges = [(a, b, label, stage, False) for a, b, label, _, _ in view["edges"]]
+    routes = {(a, b): (ports, pts) for a, b, _, ports, pts in view["edges"]}
+    f = ET.Element("mxfile", {"host": "app.diagrams.net"})
+    d = ET.SubElement(
+        f, "diagram", {"name": f"Stage {stage} — article view", "id": f"article{stage}"}
+    )
+    m = ET.SubElement(
+        d,
+        "mxGraphModel",
+        {
+            "dx": "1100",
+            "dy": "700",
+            "grid": "0",
+            "page": "1",
+            "pageWidth": "1100",
+            "pageHeight": "700",
+            "math": "0",
+        },
+    )
+    _drawio_page(
+        m,
+        nodes,
+        groups,
+        edges,
+        f"Stage {stage} — {STAGE_NAMES[stage]}: what this stage added",
+        view["note"],
+        keep=set(nodes),
+        accent_stage=stage,
+        routed=True,
+        routes=routes,
+        big=True,
+    )
+    return ET.ElementTree(f)
 
 
 def _mxfile(pages):
@@ -823,7 +926,13 @@ def main():
             _mxfile([(f"Stage {s} — {STAGE_NAMES[s]}", "stage", s)]).write(
                 here / d / "architecture.drawio", encoding="utf-8", xml_declaration=True
             )
-    print("wrote architecture.drawio + architecture-network.drawio + per-stage files")
+    for s in ARTICLE_VIEWS:
+        _article_view(s).write(
+            here / STAGE_DIRS[s] / "architecture-article.drawio",
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+    print("wrote architecture.drawio + architecture-network.drawio + per-stage + article views")
 
     ext = ("socrata", "pull", "gha", "drift")
     (prev / "full.svg").write_text(
