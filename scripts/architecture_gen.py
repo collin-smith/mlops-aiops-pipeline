@@ -61,6 +61,7 @@ _RESICON = {
     "sm_eval":     "sagemaker",
     "sm_train":    "sagemaker",
     "cond":        "sagemaker",
+    "fail":        "sagemaker",
     "registry":    "sagemaker",
     "serverless":  "sagemaker",
     "champ":       "sagemaker",
@@ -114,7 +115,7 @@ NODES: dict[str, tuple] = {
     "sm_pipe":    ("SageMaker Pipeline", "validate → train → evaluate · cached", "ml", "mxgraph.aws4.sagemaker", 730, 120, 3),
     "glue":       ("AWS Glue", "Catalog + Crawler", "analytics", "mxgraph.aws4.glue", 490, 200, 1),
     "athena":     ("Amazon Athena", "2 GB scan cap", "analytics", "mxgraph.aws4.athena", 730, 200, 1),
-    "cond":       ("Condition step", "PR-AUC ≥ floor", "security", "mxgraph.aws4.sagemaker", 970, 200, 4),
+    "cond":       ("Condition step", "PR-AUC + sector fairness", "security", "mxgraph.aws4.sagemaker", 970, 200, 4),
     # From Stage 3 the pipeline's three steps fill this row (D-040), so ECR drops below the
     # train step; EARLY_POS keeps it right of train on the Stage 2 page
     "ecr":        ("Amazon ECR", "XGBoost image", "compute", "mxgraph.aws4.elastic_container_registry", 730, 380, 2),
@@ -123,7 +124,7 @@ NODES: dict[str, tuple] = {
     # D-039: no Training Job quota, so the model trains in a Processing job
     "sm_train":   ("SageMaker Processing", "train · XGBoost · t3.xlarge", "ml", "mxgraph.aws4.sagemaker", 730, 290, 2),
     "registry":   ("SageMaker Model Registry", "Model Package Group", "ml", "mxgraph.aws4.sagemaker", 1210, 120, 4),
-    "approver":   ("Approver IAM", "separate principal", "security", "mxgraph.aws4.identity_and_access_management_iam", 1210, 200, 4),
+    "approver":   ("Approver IAM role", "training role denied", "security", "mxgraph.aws4.identity_and_access_management_iam", 1210, 200, 4),
     "champ":      ("champion / challenger", "vs approved model", "ml", "mxgraph.aws4.sagemaker", 1210, 290, 5),
     "serverless": ("SageMaker Serverless", "one-off demo · deleted", "ml", "mxgraph.aws4.sagemaker", 1450, 200, 6),
     "cwmetric":   ("CloudWatch metrics", "MLOpsAIOps/Pipeline", "mgmt", "mxgraph.aws4.cloudwatch", 1450, 120, 3),
@@ -157,9 +158,9 @@ EDGES: list[tuple] = [
     ("sm_train", "sm_eval", "model.tar.gz", 3, False),
     ("sm_train", "s3_model", "", 2, False),
     ("sm_pipe", "cwmetric", "run metrics", 3, False),
-    ("sm_eval", "cond", "evaluation.json", 4, False),
+    ("sm_eval", "cond", "evaluation + fairness", 4, False),
     ("cond", "registry", "register if pass", 4, False),
-    ("approver", "registry", "manual Approve", 4, False),
+    ("approver", "registry", "approve / reject", 4, False),
     ("ebridge", "gha", "", 5, False),
     ("gha", "oidc", "OIDC", 5, False),
     ("oidc", "sm_pipe", "", 5, False),
@@ -209,6 +210,25 @@ STEP_ROW_ROUTES: dict[tuple, tuple] = {
     ]),
     ("ecr", "sm_train"):     ("exitX=0.7;exitY=0;entryX=0.7;entryY=1;", None),
 }
+# From Stage 4 the registry sits on the run-metrics row, so that edge rides above the icons,
+# and the gate reaches the registry below its own label and left of the approver.
+REGISTRY_ROUTES: dict[tuple, tuple] = {
+    ("sm_pipe", "cwmetric"): ("exitX=0.5;exitY=0;entryX=0.5;entryY=0;", lambda p: [
+        (p("sm_pipe")[0] + 24, p("sm_pipe")[1] - 14),
+        (p("cwmetric")[0] + 24, p("sm_pipe")[1] - 14),
+    ]),
+    ("cond", "registry"): ("exitX=1;exitY=0.85;entryX=0;entryY=0.5;", lambda p: [
+        (p("registry")[0] - 20, p("cond")[1] + 41),
+        (p("registry")[0] - 20, p("registry")[1] + 24),
+    ]),
+    ("approver", "registry"): ("exitX=0.5;exitY=0;entryX=0.5;entryY=1;", None),
+}
+# Nodes that only an article view draws. The Fail step is a pipeline detail the full
+# pages leave out: they have no free slot for it that later stages don't need.
+ARTICLE_NODES: dict[str, tuple] = {
+    # D-041: a model that fails the gate ends the run here, and nothing is registered
+    "fail": ("Fail step", "rejected · nothing registered", "security", "mxgraph.aws4.sagemaker", 0, 0, 4),
+}
 # Article views: one stage's change, at a size that reads in a ~700 px article column.
 # Positions are this view's own; edges are listed explicitly with their routes.
 _BOTTOM = "exitX=1;exitY=1;entryX=0;entryY=1;"  # along the icons' lower edge, under the labels
@@ -245,6 +265,22 @@ ARTICLE_VIEWS = {
         "note": "Validate, Train and Evaluate all read processed/311 and run AWS's XGBoost image. "
                 "Also in place since Stage 1, not shown: the Socrata pull, S3 raw/, Glue, Athena, IAM, "
                 "CloudWatch Logs, SNS, Budgets and Cost Explorer.",
+    },
+    4: {
+        "nodes": {
+            "s3_raw": (60, 110), "fail": (400, 110), "approver": (740, 110),
+            "sm_eval": (60, 260), "cond": (400, 260), "registry": (740, 260),
+        },
+        "edges": [
+            ("s3_raw", "sm_eval", "communities", "exitX=0.5;exitY=1;entryX=0.5;entryY=0;", None),
+            ("sm_eval", "cond", "evaluation + fairness", _BOTTOM, None),
+            ("cond", "registry", "pass: register", _BOTTOM, None),
+            ("cond", "fail", "else", _UP, None),
+            ("approver", "registry", "approve / reject", "exitX=0.5;exitY=1;entryX=0.5;entryY=0;", None),
+        ],
+        "note": "The gate needs PR-AUC ≥ 0.25, sector recall ratio ≥ 0.8 and every group's lift ≥ 1.5. "
+                "Registered versions wait as PendingManualApproval; the training role is explicitly denied "
+                "approval. Validate and Train run as in Stage 3.",
     },
 }
 
@@ -705,7 +741,11 @@ def _drawio_page(
         if routes is not None:
             page_routes = routes
         else:
-            page_routes = {**EDGE_ROUTES, **(STEP_ROW_ROUTES if "sm_proc" in visible else {})}
+            page_routes = {
+                **EDGE_ROUTES,
+                **(STEP_ROW_ROUTES if "sm_proc" in visible else {}),
+                **(REGISTRY_ROUTES if "registry" in visible else {}),
+            }
         ports, pts = (
             page_routes.get((a, b), (_default_ports(a, b, nodes), None)) if routed else ("", None)
         )
@@ -812,7 +852,8 @@ def _fit_groups(nodes, keep):
 
 def _article_view(stage: int) -> ET.ElementTree:
     view = ARTICLE_VIEWS[stage]
-    nodes = {k: NODES[k][:4] + xy + NODES[k][6:] for k, xy in view["nodes"].items()}
+    every = {**NODES, **ARTICLE_NODES}
+    nodes = {k: every[k][:4] + xy + every[k][6:] for k, xy in view["nodes"].items()}
     xs = [x for x, _ in view["nodes"].values()]
     ys = [y for _, y in view["nodes"].values()]
     right, bottom = max(xs) + 300, max(ys) + 90
