@@ -10,7 +10,7 @@ Per-category thresholds stop the model from just learning "pothole fast, tree sl
 Open requests (null closed_date) are right-censored: we only know they have been open
 *at least* this long. One already older than its category's threshold is a certain
 breach, so it's labelled 1 (``censored`` = True). One still inside its threshold has no
-label yet and is left out; those are the rows Batch Transform scores in Stage 6.
+label yet and is left out; those are the rows Stage 6 shadow-scores (src/deploy/score.py).
 Dropping every open request instead biases the recent end of the data towards fast
 closes: on the 2026-09-23 pull, 13,378 certain breaches in the test year were being
 thrown away, and the test breach rate read 15.8% instead of 18.1%.

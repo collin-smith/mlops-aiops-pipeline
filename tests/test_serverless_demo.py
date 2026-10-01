@@ -1,12 +1,15 @@
-"""Stage 6 serverless demo — the parts that must hold without touching AWS (D-029).
+"""Stage 6 serverless demo — the parts that must hold without touching AWS (D-029, D-044).
 
 The request builder is the cost control: one Serverless variant, never provisioned
-concurrency. The rest checks the payload guard and the latency summary.
+concurrency. The rest checks the payload, the handler packaging and the latency summary.
 """
 
 from __future__ import annotations
 
 import importlib.util
+import io
+import json
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -33,15 +36,29 @@ def test_endpoint_config_rejects_invalid_memory(mb):
         demo.endpoint_config_request("n", "m", "p", memory_mb=mb)
 
 
-def test_read_payload_rows_limits_and_rejects_header(tmp_path):
-    good = tmp_path / "rows.csv"
-    good.write_text("1,0.5,1e-3\n2,0.1,4\n3,0.9,5\n")
-    assert demo.read_payload_rows(good, 2) == ["1,0.5,1e-3", "2,0.1,4"]
+def test_read_payload_pairs_rows_with_batch_scores_and_rejects_csv(tmp_path):
+    good = tmp_path / "payload.json"
+    rows = [{"service_name": "A", "cat_late_90d": 0.2}, {"service_name": "B", "cat_late_90d": None}]
+    good.write_text(json.dumps({"rows": rows, "batch_scores": [0.9, 0.8]}))
+    assert demo.read_payload(good, 1) == [(rows[0], 0.9)]
 
-    header = tmp_path / "header.csv"
-    header.write_text("service_name,hour\n1,2\n")
-    with pytest.raises(SystemExit):
-        demo.read_payload_rows(header, 5)
+    csv = tmp_path / "rows.csv"
+    csv.write_text("1,0.5,1e-3\n")
+    with pytest.raises((SystemExit, ValueError)):
+        demo.read_payload(csv, 5)
+
+
+def test_handler_tarball_holds_only_the_handler_at_its_root():
+    with tarfile.open(fileobj=io.BytesIO(demo.handler_tarball())) as tar:
+        assert tar.getnames() == ["inference.py"]
+
+
+def test_container_runs_the_shadow_model_with_our_handler():
+    desc = {"InferenceSpecification": {"Containers": [{"Image": "img", "ModelDataUrl": "s3://m"}]}}
+    c = demo.container(desc, "s3://b/code/x/sourcedir.tar.gz", "ca-central-1")
+    assert c["Image"] == "img" and c["ModelDataUrl"] == "s3://m"
+    assert c["Environment"]["SAGEMAKER_PROGRAM"] == "inference.py"
+    assert c["Environment"]["SAGEMAKER_SUBMIT_DIRECTORY"] == "s3://b/code/x/sourcedir.tar.gz"
 
 
 def test_summarize_latencies_splits_cold_from_warm():

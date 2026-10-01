@@ -5,6 +5,58 @@ ADR-lite. Newest first. Seeded from the planning docs
 
 ---
 
+## D-044 — Shadow scoring: a separate model group, open requests still inside their deadline, every row labelled not-for-use
+
+**Status:** Accepted (2026-10-01), Collin's choices on the model's home and the demo. Built and
+tested locally; not yet applied or run on AWS. Amends D-029 (what the demo serves) and D-039
+(scoring is a Processing job outside the pipeline).
+
+**Decision:**
+- **The shadow model lives in its own group**, `mlops-aiops-breach-risk-shadow`
+  (`infra/shadow.tf`). `scripts/register_shadow.py <execution>` registers a run the gate
+  rejected, once, as **Rejected** (what the gate decided), with the run's evaluation and
+  fairness reports attached and `usage = shadow-not-for-use` in its metadata. It reads the model
+  and report paths from the run's own Train and Evaluate jobs, because a cached step's output
+  sits under an earlier run's prefix. The approver role gets an explicit deny on the group's
+  versions; the training role is already denied everywhere and the CI role was never allowed.
+  So no project role can approve a shadow version. An account admin still could, which is why
+  the scoring launcher refuses a version that reads Approved or isn't marked shadow.
+  The alternative, scoring straight from the run's S3 path, would leave the registry blind to a
+  model that scored real requests.
+- **Which requests get a score:** open requests still **inside** their category's deadline at
+  the snapshot (`src/deploy/score.py`). An open request past its deadline is already late
+  (`build_labels.overdue_open` labels it 1); a score there forecasts nothing and would inflate
+  Stage 7's precision. The two sets split the open requests exactly, and a test holds that.
+- **Features as training saw them:** each row's features are computed as of its filing time,
+  with the model's own `feature_schema.json` and `thresholds.csv`. The rolling counts run over the
+  whole snapshot from a month before the oldest scored request, not over the open requests
+  alone: for training rows older than a few weeks every request has since closed or gone
+  overdue, so their counts include all requests. Counting only labelled requests would have
+  undercounted the scored rows' `cat_open_30d` by a median 36% on the 2026-09-23 snapshot.
+  (The last few weeks of the training test year carry that undercount; noted for Stage 7.)
+- **Flag:** the top 10% within each sector (D-042's operating point), with a rank in sector.
+- **Every output row says `usage = shadow-not-for-use`** and names its model package ARN. The
+  scores are `scored/asof=<snapshot>/scores-v<version>.parquet`, read by the Glue table
+  `shadow_scores` (partition projection: a new date needs no crawler). `usage` is its first
+  column. The view `shadow_outcomes` joins each score to the latest snapshot in
+  `processed_311` and calls it `on_time`, `late` or `undecided`; it's what Stage 7 grades.
+- **Scoring is a Processing job outside the pipeline** (`scripts/score_job.py`): one ml.t3.xlarge,
+  a 30-minute limit, the project tag, the budget check first. It runs `src.deploy.score`
+  directly, not through `src.pipeline.step`, so it adds no CloudWatch metrics. The job also
+  writes the demo's payload: the features and batch scores of the five highest-scored rows.
+- **The Serverless demo stays, smaller** (D-029 amended). It serves the shadow version with
+  `src/deploy/inference.py`, because the built-in handler reads a numeric CSV and this model's
+  categorical features would be read as numbers. It sends the batch job's payload and checks
+  each real-time score against the batch score. The handler imports nothing from `src` and a
+  test holds its scores equal to the batch path's. The point it makes: the six history
+  features need the whole request history, so a real-time caller would need a feature store.
+**Local run (2026-10-01, $0):** the challenger retrained locally reproduces `vhhhe5vtr34a`
+(PR-AUC 0.374, lift 2.43×). Scoring the 2026-09-23 snapshot took 22 s: 14,714 open requests
+inside their deadline, 1,477 flagged (10% of each sector), 2.4% in categories the model never
+saw.
+**Cost:** registration, the group, the table and the views cost nothing. One scoring run is a
+few minutes of ml.t3.xlarge, about $0.01–0.02. The demo is cents, and deletes what it creates.
+
 ## D-043 — Retraining runs from GitHub Actions on demand, and a challenger must beat the approved champion
 
 **Status:** Accepted (2026-09-30).

@@ -2,7 +2,8 @@
 #   raw/311/asof=YYYY-MM-DD/      immutable Socrata extracts (frozen snapshots)
 #   processed/311/year=/month=/   partitioned Parquet, crawled into the Catalog
 #   model-artifacts/              SageMaker model.tar.gz outputs
-#   scored/                       Batch Transform output (Stage 6)
+#   scored/asof=YYYY-MM-DD/       shadow scores, not for use (Stage 6, D-044; table shadow_scores)
+#   scored-reports/<job>/         each scoring run's summary + the Serverless demo's payload
 
 resource "aws_s3_bucket" "datalake" {
   bucket = local.bucket_name

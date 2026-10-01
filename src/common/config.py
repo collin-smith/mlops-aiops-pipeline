@@ -82,7 +82,7 @@ class Config:
     metric_namespace: str = field(
         default_factory=lambda: os.environ.get("MLOPS_METRIC_NAMESPACE", "MLOpsAIOps/Pipeline")
     )
-    # Stage 4 registers into this group; Stage 6 scores the latest Approved package in it.
+    # Stage 4 registers into this group. Stage 6 shadow-scores from a separate group (D-044).
     model_package_group: str = field(
         default_factory=lambda: os.environ.get(
             "MLOPS_MODEL_PACKAGE_GROUP", "mlops-aiops-breach-risk"
