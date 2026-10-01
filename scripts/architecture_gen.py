@@ -289,14 +289,16 @@ ARTICLE_VIEWS = {
     },
     5: {
         "nodes": {
-            "gha": (60, 110), "oidc": (400, 110), "sm_pipe": (740, 110),
-            "registry": (60, 260), "champ": (400, 260), "cond": (740, 260),
+            "gha": (20, 110), "oidc": (400, 110), "sm_pipe": (740, 110),
+            "champ": (400, 260), "cond": (740, 260),
+            "registry": (400, 410),
         },
+        "outside": ("gha",),
         "edges": [
             ("gha", "oidc", "no stored keys", _BOTTOM, None),
             ("oidc", "sm_pipe", "start a run", _BOTTOM, None),
             ("sm_pipe", "cond", "evaluate", "exitX=0.5;exitY=1;entryX=0.5;entryY=0;", None),
-            ("registry", "champ", "latest Approved", _BOTTOM, None),
+            ("registry", "champ", "latest Approved", _UP, None),
             ("champ", "cond", "margin", _BOTTOM, None),
         ],
         "note": "Started by hand; the monthly schedule stays off until the series ends. The challenger adds "
@@ -878,9 +880,12 @@ def _article_view(stage: int) -> ET.ElementTree:
     xs = [x for x, _ in view["nodes"].values()]
     ys = [y for _, y in view["nodes"].values()]
     right, bottom = max(xs) + 300, max(ys) + 90
+    # nodes outside AWS (e.g. GitHub Actions) sit left of the frames
+    inside = [x for k, (x, _) in view["nodes"].items() if k not in view.get("outside", ())]
+    left = min(inside) - 28
     groups = [
-        ("c", 16, 58, right - 16, bottom - 58 + 20, "AWS Cloud", "#232F3E", 0),
-        ("r", 32, 76, right - 48, bottom - 76, "Region  ca-central-1", "#00A4A6", 1),
+        ("c", left - 16, 58, right - left + 16, bottom - 58 + 20, "AWS Cloud", "#232F3E", 0),
+        ("r", left, 76, right - left - 16, bottom - 76, "Region  ca-central-1", "#00A4A6", 1),
     ]
     edges = [(a, b, label, stage, False) for a, b, label, _, _ in view["edges"]]
     routes = {(a, b): (ports, pts) for a, b, _, ports, pts in view["edges"]}
