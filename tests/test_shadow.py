@@ -101,7 +101,7 @@ def test_run_outputs_follow_each_jobs_own_output_even_when_cached():
     assert out["gate_outcome"] == "False"
 
 
-def test_registration_is_rejected_marked_not_for_use_and_tagged():
+def test_registration_is_rejected_and_marked_not_for_use():
     req = shadow.registration_request(
         group="g",
         image_uri=IMAGE,
@@ -110,17 +110,20 @@ def test_registration_is_rejected_marked_not_for_use_and_tagged():
         execution_id="RUN",
         fairness={
             "passed": False,
-            "dimensions": {"sector": {"recall_ratio": 0.79}, "srg": {"recall_ratio": 0.72}},
+            # the real fairness.json shape: every number under "value"
+            "dimensions": {
+                "sector": {"recall_ratio": {"value": 0.7861}},
+                "srg": {"recall_ratio": {"value": 0.7238}},
+            },
         },
-        tags=[{"Key": "project", "Value": "mlops-aiops"}],
     )
     assert req["ModelApprovalStatus"] == "Rejected"
     meta = req["CustomerMetadataProperties"]
     assert meta["usage"] == "shadow-not-for-use" and meta["fairness_passed"] == "false"
-    assert meta["recall_ratio_sector"] == "0.79" and meta["recall_ratio_srg"] == "0.72"
+    assert meta["recall_ratio_sector"] == "0.7861" and meta["recall_ratio_srg"] == "0.7238"
     assert req["ModelPackageDescription"].startswith("SHADOW, NOT FOR USE")
     assert req["InferenceSpecification"]["Containers"][0]["ModelDataUrl"] == "s3://m"
-    assert {"Key": "project", "Value": "mlops-aiops"} in req["Tags"]
+    assert "Tags" not in req  # AWS refuses tags on a version; the group has them
     assert all(len(k) <= 128 and len(v) <= 256 for k, v in meta.items())
 
 

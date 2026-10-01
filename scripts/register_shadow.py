@@ -22,7 +22,7 @@ import boto3
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from src.common.config import aws_tags, get_config  # noqa: E402
+from src.common.config import get_config  # noqa: E402
 from src.common.sm_jobs import xgboost_image  # noqa: E402
 from src.deploy import shadow  # noqa: E402
 from src.promote.fairness import summary_lines  # noqa: E402
@@ -66,7 +66,6 @@ def main(argv: list[str] | None = None) -> int:
         params=shadow.run_parameters(sm, exec_arn),
         execution_id=execution_id,
         fairness=fairness,
-        tags=aws_tags(),
     )
     if args.dry_run:
         print(json.dumps(request, indent=2))

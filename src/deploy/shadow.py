@@ -77,10 +77,17 @@ def registration_request(
     params: dict[str, str],
     execution_id: str,
     fairness: dict,
-    tags: list[dict],
 ) -> dict:
-    """CreateModelPackage for the shadow group: Rejected, with the reports and the lineage."""
-    ratios = {d: v.get("recall_ratio") for d, v in fairness.get("dimensions", {}).items()}
+    """CreateModelPackage for the shadow group: Rejected, with the reports and the lineage.
+
+    No tags: AWS refuses them on a version ("Tags are not supported in Model Package
+    versions"). The group carries the project tag, and a version costs nothing to keep.
+    """
+    # fairness.json stores each number as {"value": x}, the shape the gate's JsonGet reads
+    ratios = {
+        d: (v.get("recall_ratio") or {}).get("value")
+        for d, v in fairness.get("dimensions", {}).items()
+    }
     return {
         "ModelPackageGroupName": group,
         "ModelPackageDescription": (
@@ -110,7 +117,6 @@ def registration_request(
             **{f"recall_ratio_{d}": str(r) for d, r in ratios.items() if r is not None},
             "model_card": MODEL_CARD_URL,
         },
-        "Tags": tags,
     }
 
 
