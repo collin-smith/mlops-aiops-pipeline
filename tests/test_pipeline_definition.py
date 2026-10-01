@@ -176,7 +176,8 @@ def test_gate_paths_exist_in_the_reports_the_code_writes():
 
 def test_champion_check_passes_with_no_champion_or_a_real_win():
     (check,) = [c for c in _gate()["Arguments"]["Conditions"] if c["Type"] == "Or"]
-    no_champion, wins = check["Arguments"]["Conditions"]
+    assert "Arguments" not in check  # SageMaker rejects the definition if it's there
+    no_champion, wins = check["Conditions"]
     assert no_champion["Type"] == "Equals" and no_champion["RightValue"] == 0
     assert no_champion["LeftValue"]["Std:JsonGet"]["Path"] == "champion.exists"
     assert wins["Type"] == "GreaterThanOrEqualTo" and wins["RightValue"] == 0.005

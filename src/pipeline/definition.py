@@ -132,17 +132,16 @@ def _gate(*, image_uri: str, group: str) -> dict:
     ]
     conditions.append(
         {
+            # a logical condition carries its conditions directly, not under "Arguments"
             "Type": "Or",
-            "Arguments": {
-                "Conditions": [
-                    {"Type": "Equals", "LeftValue": json_get("champion_exists"), "RightValue": 0},
-                    {
-                        "Type": "GreaterThanOrEqualTo",
-                        "LeftValue": json_get("champion_margin"),
-                        "RightValue": GUARDBAND,
-                    },
-                ]
-            },
+            "Conditions": [
+                {"Type": "Equals", "LeftValue": json_get("champion_exists"), "RightValue": 0},
+                {
+                    "Type": "GreaterThanOrEqualTo",
+                    "LeftValue": json_get("champion_margin"),
+                    "RightValue": GUARDBAND,
+                },
+            ],
         }
     )
     register = {

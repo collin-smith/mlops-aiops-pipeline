@@ -34,6 +34,10 @@ ADR-lite. Newest first. Seeded from the planning docs
   repo's tokens carry the ID-pinned form (`gh api repos/<owner>/<name>/actions/oidc/customization/sub`
   shows it). Pinning the IDs, rather than wildcarding them, keeps a repo recreated under the
   same name from inheriting the role.
+- **A logical condition carries its conditions directly**: `{"Type": "Or", "Conditions": [...]}`.
+  The second run failed at `UpdatePipeline` with "unknown property 'Arguments'" because the
+  champion check had them under `Arguments`, which is only right for the Condition *step*.
+  SageMaker validates the definition before starting anything, so it cost nothing.
 - Retrain metrics (cost, duration, promoted) are **not** added as CloudWatch custom metrics:
   each costs $0.30 a month, the per-step metrics already carry cost and duration, and the run's
   summary page carries the verdict. Stage 7 decides whether any is worth a metric.
