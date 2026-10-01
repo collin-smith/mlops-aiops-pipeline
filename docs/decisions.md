@@ -28,6 +28,12 @@ ADR-lite. Newest first. Seeded from the planning docs
   "no approved champion, or the challenger's PR-AUC beats it by ≥ 0.005". If the registry can't
   be read, Evaluate fails: no comparison, no pass. With no champion today, the check passes
   trivially; the fairness floors are what reject.
+- **The trust policy matches GitHub's immutable OIDC subject**,
+  `repo:<owner>@<owner id>/<name>@<repo id>:*`. The first run failed with "Not authorized to
+  perform sts:AssumeRoleWithWebIdentity": the role trusted `repo:<owner>/<name>:*`, but this
+  repo's tokens carry the ID-pinned form (`gh api repos/<owner>/<name>/actions/oidc/customization/sub`
+  shows it). Pinning the IDs, rather than wildcarding them, keeps a repo recreated under the
+  same name from inheriting the role.
 - Retrain metrics (cost, duration, promoted) are **not** added as CloudWatch custom metrics:
   each costs $0.30 a month, the per-step metrics already carry cost and duration, and the run's
   summary page carries the verdict. Stage 7 decides whether any is worth a metric.

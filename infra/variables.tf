@@ -25,6 +25,21 @@ variable "github_repo" {
   default     = "collin-smith/mlops-aiops-pipeline"
 }
 
+# GitHub's immutable OIDC subject pins the owner's and the repo's numeric IDs, so a repo
+# recreated under the same name can't inherit this role. Find them with:
+#   gh api repos/<owner>/<name>/actions/oidc/customization/sub
+variable "github_owner_id" {
+  description = "Numeric ID of the repo owner, from the repo's OIDC sub_claim_prefix."
+  type        = string
+  default     = "74462915"
+}
+
+variable "github_repo_id" {
+  description = "Numeric ID of the repo, from the repo's OIDC sub_claim_prefix."
+  type        = string
+  default     = "1384271532"
+}
+
 variable "budget_warn_usd" {
   description = "Series-total ACTUAL spend tagged to this project that triggers the warning email."
   type        = number

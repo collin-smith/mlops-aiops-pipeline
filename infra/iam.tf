@@ -114,6 +114,19 @@ resource "aws_iam_openid_connect_provider" "github" {
   thumbprint_list = data.tls_certificate.github.certificates[*].sha1_fingerprint
 }
 
+# The token's subject, in GitHub's immutable form (D-043):
+#   repo:<owner>@<owner id>/<name>@<repo id>:<ref or environment>
+# The name-only form (repo:<owner>/<name>:*) stopped matching once GitHub switched this repo
+# to immutable subjects, and AWS answered "Not authorized to perform
+# sts:AssumeRoleWithWebIdentity".
+locals {
+  github_oidc_sub = format(
+    "repo:%s@%s/%s@%s:*",
+    split("/", var.github_repo)[0], var.github_owner_id,
+    split("/", var.github_repo)[1], var.github_repo_id,
+  )
+}
+
 resource "aws_iam_role" "github_actions" {
   name = "${local.name}-github-actions"
   assume_role_policy = jsonencode({
@@ -124,7 +137,7 @@ resource "aws_iam_role" "github_actions" {
       Action    = "sts:AssumeRoleWithWebIdentity"
       Condition = {
         StringEquals = { "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com" }
-        StringLike   = { "token.actions.githubusercontent.com:sub" = "repo:${var.github_repo}:*" }
+        StringLike   = { "token.actions.githubusercontent.com:sub" = local.github_oidc_sub }
       }
     }]
   })
