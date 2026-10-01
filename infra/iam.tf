@@ -153,6 +153,30 @@ resource "aws_iam_role_policy" "github_actions" {
         Action   = ["s3:GetObject", "s3:PutObject", "s3:ListBucket"]
         Resource = [aws_s3_bucket.datalake.arn, "${aws_s3_bucket.datalake.arn}/*"]
       },
+      # Stage 5 retrain workflow (D-043): a new snapshot replaces processed/311 (D-036) ...
+      {
+        Effect   = "Allow"
+        Action   = ["s3:DeleteObject"]
+        Resource = ["${aws_s3_bucket.datalake.arn}/processed/311/*"]
+      },
+      # ... the launcher updates this one pipeline's definition before each run ...
+      {
+        Effect   = "Allow"
+        Action   = ["sagemaker:UpdatePipeline"]
+        Resource = ["arn:${local.partition}:sagemaker:${var.region}:${local.account_id}:pipeline/${local.name}-train"]
+      },
+      # ... checks the budget hard stop first ...
+      {
+        Effect   = "Allow"
+        Action   = ["iam:ListAttachedRolePolicies"]
+        Resource = [aws_iam_role.sagemaker.arn]
+      },
+      # ... and prints a failed step's log
+      {
+        Effect   = "Allow"
+        Action   = ["logs:GetLogEvents", "logs:DescribeLogStreams", "logs:FilterLogEvents"]
+        Resource = "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/sagemaker/*"
+      },
     ]
   })
 }

@@ -1,32 +1,64 @@
-# Stage 5 wires this up. Committed now as a disabled stub so the OIDC role and repo
-# secrets can be set up early. Does nothing until `workflow_dispatch` is run manually
-# or the schedule is uncommented.
+# Stage 5 (D-043): retrain on a fresh snapshot, through the same pipeline and gate.
+#
+# Started by hand (Actions -> retrain -> Run workflow). The monthly schedule stays
+# commented out until the series is done (D-030: nothing runs on its own while paused;
+# nuke.sh --check reports it if it's ever switched on).
+#
+# It signs in with OIDC, so no AWS keys are stored in GitHub. The CI role can pull data,
+# start the pipeline and read its results; it can't approve a model (D-041). A model that
+# passes the gate waits for a person in the approver role.
+#
+# Repo settings it needs: secret AWS_ROLE_ARN (terraform output github_actions_role_arn),
+# secret SAGEMAKER_ROLE_ARN (terraform output sagemaker_role_arn), secret MLOPS_BUCKET
+# (terraform output datalake_bucket), and variable AWS_REGION (ca-central-1).
 name: retrain
 
 on:
   workflow_dispatch:
+    inputs:
+      new_snapshot:
+        description: "Pull a fresh snapshot from the City's open data first (else retrain on the latest in S3)"
+        type: boolean
+        default: true
   # schedule:
-  #   - cron: "0 7 1 * *" # 07:00 UTC on the 1st — matches the data's real cadence
+  #   - cron: "0 13 2 * *" # 13:00 UTC on the 2nd of each month, after the City's monthly refresh
 
 permissions:
   id-token: write # OIDC
   contents: read
 
+concurrency:
+  group: retrain
+  cancel-in-progress: false
+
 jobs:
   retrain:
-    if: false # <- Stage 5 flips this on
     runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      MLOPS_BUCKET: ${{ secrets.MLOPS_BUCKET }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
     steps:
       - uses: actions/checkout@v4
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: retrain-${{ github.run_id }}
       - uses: astral-sh/setup-uv@v3
         with:
           python-version: "3.12"
-      - run: uv sync --extra ml
-      - name: Pull latest data + run pipeline (challenger)
-        run: uv run python -m src.pipeline.definition --run --asof "$(date +%F)"
-      - name: Champion / challenger promotion
-        run: uv run python -m src.promote.champion_challenger --guardband 0.005
+      # base dependencies only: the pipeline is plain JSON, no SageMaker SDK (D-040)
+      - run: uv sync
+
+      - name: Pull a fresh snapshot (311 requests + community lookup)
+        if: ${{ inputs.new_snapshot }}
+        run: |
+          ASOF=$(date -u +%F)
+          uv run python -m src.ingest.socrata_pull pull --years 5 --asof "$ASOF"
+          uv run python -m src.ingest.socrata_pull communities --asof "$ASOF"
+          uv run python -m src.ingest.socrata_pull to-parquet --asof "$ASOF"
+          uv run python -m src.ingest.socrata_pull snapshot --asof "$ASOF"
+
+      - name: Run the pipeline (validate, train, evaluate, gate)
+        run: uv run python scripts/pipeline.py --role-arn "${{ secrets.SAGEMAKER_ROLE_ARN }}" --allow-rejection

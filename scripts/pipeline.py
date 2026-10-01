@@ -13,7 +13,9 @@ prints each step's status, whether it came from the cache, its billed time, the 
 on its job, the log of any failed step, the gate's decision, and the two reports.
 A run the gate rejects ends Failed; that's the gate working, and it says so.
 
---show prints the definition and makes no AWS calls.
+--show prints the definition and makes no AWS calls. --allow-rejection exits 0 when the
+gate rejects the model (the retrain workflow uses it: a rejection is a result, not a fault).
+On GitHub Actions the verdict and the fairness table also go to the run's summary page.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -174,6 +177,23 @@ def verdict(status: str, rows: list[dict]) -> str:
     return f"run {status} before the gate decided"
 
 
+def write_step_summary(arn: str, asof: str, outcome: str, usd: float, table: list[str]) -> None:
+    """On GitHub Actions, put the result on the run's summary page."""
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path:
+        return
+    lines = [
+        f"### Retrain run `{arn.rsplit('/', 1)[-1]}`",
+        f"- snapshot `{asof}`",
+        f"- **{outcome}**",
+        f"- estimated compute ${usd:.3f}",
+    ]
+    if table:
+        lines += ["", "```text", *table, "```"]
+    with open(path, "a") as f:
+        f.write("\n".join(lines) + "\n")
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument(
@@ -184,6 +204,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-train-rows", type=int, default=0, help="sample the training rows")
     ap.add_argument("--image-version", default="3.2-0", help="built-in XGBoost image tag")
     ap.add_argument("--show", action="store_true", help="print the definition; no AWS calls")
+    ap.add_argument(
+        "--allow-rejection", action="store_true", help="exit 0 when the gate rejects the model"
+    )
     args = ap.parse_args(argv)
 
     cfg = get_config()
@@ -232,7 +255,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     rows = step_report(sm, list_steps(sm, arn), cfg.project, args.instance_type)
-    print(f"\nrun {status}: {verdict(status, rows)}")
+    outcome = verdict(status, rows)
+    print(f"\nrun {status}: {outcome}")
     for r in rows:
         print("  " + json.dumps(r))
     billed = sum(r.get("usd", 0.0) for r in rows)
@@ -246,10 +270,16 @@ def main(argv: list[str] | None = None) -> int:
             print(f"\n{r['step']} log:")
             print_job_log(logs, r["job"])
     evaluate = next((r for r in rows if r["step"] == "Evaluate" and r["job"]), None)
+    fairness_table: list[str] = []
     if evaluate and evaluate["status"] == "Succeeded":
         print(json.dumps(read_report(sm, s3, evaluate["job"], "evaluation.json"), indent=2))
-        print("\n".join(summary_lines(read_report(sm, s3, evaluate["job"], "fairness.json"))))
-    return 0 if status == "Succeeded" else 1
+        fairness_table = summary_lines(read_report(sm, s3, evaluate["job"], "fairness.json"))
+        print("\n".join(fairness_table))
+    write_step_summary(arn, asof, outcome, billed, fairness_table)
+    if status == "Succeeded":
+        return 0
+    rejected = outcome.startswith("REJECTED")
+    return 0 if rejected and args.allow_rejection else 1
 
 
 if __name__ == "__main__":

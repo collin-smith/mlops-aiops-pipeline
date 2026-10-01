@@ -92,11 +92,12 @@ def test_non_residential_srg_classes_are_reported_not_gated():
     """srg N/A (industrial land, parks) and FUTURE (unbuilt) aren't kinds of community."""
     preds = _predictions()
     extra = pd.DataFrame(
-        [{"comm_code": "IND", "sector": "CENTRE", "srg": "N/A"},
-         {"comm_code": "FUT", "sector": "CENTRE", "srg": "FUTURE"}]
+        [{"comm_code": "IND", "sector": "EAST", "srg": "N/A"},
+         {"comm_code": "FUT", "sector": "EAST", "srg": "FUTURE"}]
     )  # fmt: skip
     comms = pd.concat([_communities(), extra], ignore_index=True)
-    # big enough to measure, and the model is useless there
+    # big enough to measure, and the model is useless there; a sector of their own, so the
+    # per-sector cutoff doesn't move flags between the other groups
     blind = pd.DataFrame(
         {"comm_code": ["IND", "FUT"] * 2_000, "breach": [1, 1, 0, 0] * 1_000, "pred": -5.0}
     )
@@ -105,6 +106,22 @@ def test_non_residential_srg_classes_are_reported_not_gated():
     assert groups["N/A"]["gated"] is False and groups["N/A"]["rows"] == 2_000
     assert groups["FUTURE"]["gated"] is False
     assert report["dimensions"]["srg"]["passed"]
+
+
+def test_per_sector_cutoff_flags_a_tenth_of_every_sector():
+    preds = _predictions()
+    # one sector's scores run hot: a city-wide cutoff would flag mostly there
+    hot = preds["comm_code"].str.startswith("SO")
+    preds.loc[hot, "pred"] += 3
+    city = fairness_report(preds, _communities(), FairnessThresholds(cutoff_by=None))
+    per_sector = fairness_report(preds, _communities())
+
+    def flag_rates(r):
+        return {g["group"]: g["flag_rate"] for g in r["dimensions"]["sector"]["groups"]}
+
+    assert flag_rates(city)["SOUTHEAST"] > 0.3
+    assert all(abs(v - 0.10) < 0.01 for v in flag_rates(per_sector).values())
+    assert per_sector["operating_point"] == {"top_fraction": 0.1, "cutoff_by": "sector"}
 
 
 def test_fewer_than_two_measurable_groups_fails_closed():

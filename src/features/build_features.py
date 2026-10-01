@@ -6,6 +6,9 @@ categorical : service_name, agency_responsible, comm_name, source
 calendar    : req_month, req_dow, req_is_weekend, req_is_holiday_week
 backlog     : cat_open_30d      (rolling 30-day request count for that service_name)
               comm_req_30d      (rolling 30-day request count for that community)
+history     : the Stage 5 challenger's six (``src/features/history.py``, D-042): backlog
+              against normal, and recent late rates by category, community, sector and their
+              combinations, counting only outcomes already decided at intake time
 
 No column derived from updated_date / closed_date / status_description. The
 ``assert_no_leakage`` check in ``build_labels`` runs over the output of ``build_features``.
@@ -18,11 +21,14 @@ import numpy as np
 import pandas as pd
 
 from src.common.config import LEAKY_COLUMNS
+from src.features.history import HISTORY_COLUMNS, History, add_history_features
 
 CATEGORICAL = ["service_name", "agency_responsible", "comm_name", "source"]
 CALENDAR = ["req_month", "req_dow", "req_is_weekend", "req_is_holiday_week"]
 BACKLOG = ["cat_open_30d", "comm_req_30d"]
 FEATURE_COLUMNS = CATEGORICAL + CALENDAR + BACKLOG
+# baseline = the Stage 2 model (D-037); challenger = Stage 5 (D-042)
+FEATURE_SETS = {"baseline": FEATURE_COLUMNS, "challenger": FEATURE_COLUMNS + HISTORY_COLUMNS}
 
 _AB_HOLIDAYS_CACHE: dict[tuple[int, int], set] = {}
 
@@ -88,10 +94,25 @@ def add_backlog_features(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def build_features(df: pd.DataFrame, *, keep_key: bool = True) -> pd.DataFrame:
-    """Return the model-ready feature matrix (+ ``service_request_id`` if ``keep_key``)."""
+def build_features(
+    df: pd.DataFrame,
+    *,
+    keep_key: bool = True,
+    history: History | None = None,
+    sectors: pd.Series | None = None,
+) -> pd.DataFrame:
+    """Return the model-ready feature matrix (+ ``service_request_id`` if ``keep_key``).
+
+    With ``history`` (and ``sectors``, comm_code -> sector) it's the challenger's feature
+    set; without, the baseline's.
+    """
     out = add_backlog_features(add_calendar_features(df))
-    cols = FEATURE_COLUMNS[:]
+    cols = FEATURE_SETS["baseline"][:]
+    if history is not None:
+        if sectors is None:
+            raise ValueError("history features need the sector lookup")
+        out = add_history_features(out, history, sectors)
+        cols = FEATURE_SETS["challenger"][:]
     if keep_key and "service_request_id" in out:
         cols = ["service_request_id", *cols]
     result = out[cols].copy()

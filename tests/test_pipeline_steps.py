@@ -32,7 +32,7 @@ def test_train_then_evaluate_reproduces_training_metrics(tmp_path, requests_fram
     (comms / evaluate.COMMUNITIES_FILE).write_text(
         json.dumps([{"comm_code": "X", "sector": "CENTRE", "srg": "ESTABLISHED"}])
     )
-    assert train.main(["--data", str(data), "--out", str(model)]) == 0
+    assert train.main(["--data", str(data), "--communities", str(comms), "--out", str(model)]) == 0
     args = ["--model", str(model), "--data", str(data), "--communities", str(comms)]
     assert evaluate.main([*args, "--out", str(out)]) == 0
 

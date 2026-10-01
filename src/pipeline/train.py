@@ -1,9 +1,17 @@
-"""Stage 2 training step: labels, features, XGBoost, evaluation, and the model artifact.
+"""Training step: labels, features, XGBoost, evaluation, and the model artifact.
 
-The same model as ``notebooks/02_baseline_model.ipynb``, packaged to run inside a
-SageMaker Processing job (D-039; launched by ``scripts/train_job.py``) or locally:
+Two feature sets (``--feature-set``):
 
-    python -m src.pipeline.train --data data/processed/311 --out /tmp/model
+* ``baseline``: the Stage 2 model, as in ``notebooks/02_baseline_model.ipynb`` (D-037),
+  trained on the whole training window
+* ``challenger`` (the default since Stage 5, D-042): adds the history features in
+  ``src/features/history.py`` and trains on the most recent ``--train-years`` only. It
+  needs ``--communities`` for the sector lookup.
+
+It runs inside a SageMaker Processing job (D-039) or locally:
+
+    python -m src.pipeline.train --data data/processed/311 \
+        --communities data/raw/communities/asof=2026-09-23 --out /tmp/model
 
 It writes to ``--out``:
   model.tar.gz   xgboost-model, feature_schema.json (column order and the category levels
@@ -26,8 +34,17 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from src.features.build_features import CATEGORICAL, align_categories, build_features
+from src.features.build_features import (
+    CATEGORICAL,
+    FEATURE_SETS,
+    align_categories,
+    build_features,
+)
 from src.features.build_labels import assert_no_leakage, build_training_labels
+from src.features.history import build_history, sector_lookup
+
+COMMUNITIES_FILE = "communities.json"
+DEFAULT_TRAIN_YEARS = {"baseline": 0, "challenger": 2}
 
 # notebooks/02_baseline_model.ipynb, unchanged (D-037's 2.0x baseline).
 PARAMS = {
@@ -76,11 +93,39 @@ def evaluate(y: np.ndarray, p: np.ndarray) -> dict:
     }
 
 
-def feature_schema(features: pd.DataFrame) -> dict:
+def feature_schema(features: pd.DataFrame, feature_set: str, train_years: int) -> dict:
     return {
+        "feature_set": feature_set,
+        "train_years": train_years,
         "columns": list(features.columns),
         "categories": {c: [str(v) for v in features[c].cat.categories] for c in CATEGORICAL},
     }
+
+
+def load_sectors(communities_dir: Path | None) -> pd.Series | None:
+    if communities_dir is None:
+        return None
+    rows = json.loads((communities_dir / COMMUNITIES_FILE).read_text())
+    return sector_lookup(pd.DataFrame(rows))
+
+
+def featurize(frame, raw, thresholds, sectors, feature_set: str) -> pd.DataFrame:
+    """The feature matrix for ``frame``. History features look back over the whole
+    snapshot ``raw``, judged by the training split's ``thresholds``."""
+    if feature_set == "baseline":
+        return build_features(frame, keep_key=False)
+    if sectors is None:
+        raise SystemExit("the challenger feature set needs --communities")
+    history = build_history(raw, thresholds, sectors)
+    return build_features(frame, keep_key=False, history=history, sectors=sectors)
+
+
+def recent(train: pd.DataFrame, years: int) -> pd.DataFrame:
+    """The last ``years`` of the training split (0 = all of it)."""
+    if not years:
+        return train
+    req = pd.to_datetime(train["requested_date"], utc=True, format="ISO8601")
+    return train.loc[req >= req.max() - pd.DateOffset(years=years)].reset_index(drop=True)
 
 
 def write_artifacts(
@@ -108,7 +153,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--max-train-rows", type=int, default=0, help="random sample of the training rows (0 = all)"
     )
+    ap.add_argument("--feature-set", choices=list(FEATURE_SETS), default="challenger")
+    ap.add_argument("--communities", type=Path, help=f"directory holding {COMMUNITIES_FILE}")
+    ap.add_argument(
+        "--train-years", type=int, help="train on the last N years only (default: by feature set)"
+    )
     args = ap.parse_args(argv)
+    years = DEFAULT_TRAIN_YEARS[args.feature_set] if args.train_years is None else args.train_years
+    sectors = load_sectors(args.communities)
 
     import sklearn
     import xgboost as xgb
@@ -121,11 +173,12 @@ def main(argv: list[str] | None = None) -> int:
     t0 = time.time()
     raw = load_requests(args.data)
     train, test, thresholds = build_training_labels(raw)
+    train = recent(train, years)
     if args.max_train_rows and len(train) > args.max_train_rows:
         train = train.sample(n=args.max_train_rows, random_state=42).sort_index()
-    X_train = build_features(train, keep_key=False)
+    X_train = featurize(train, raw, thresholds, sectors, args.feature_set)
     # categories the model never saw become missing; XGBoost routes them down its default branch
-    X_test = align_categories(build_features(test, keep_key=False), X_train)
+    X_test = align_categories(featurize(test, raw, thresholds, sectors, args.feature_set), X_train)
     assert_no_leakage(X_train)
     assert_no_leakage(X_test)
     y_train, y_test = train["breach"].to_numpy(), test["breach"].to_numpy()
@@ -146,7 +199,9 @@ def main(argv: list[str] | None = None) -> int:
         xgboost=xgb.__version__,
         params=PARAMS,
     )
-    write_artifacts(model.get_booster(), feature_schema(X_train), thresholds, metrics, args.out)
+    metrics.update(feature_set=args.feature_set, train_years=years)
+    schema = feature_schema(X_train, args.feature_set, years)
+    write_artifacts(model.get_booster(), schema, thresholds, metrics, args.out)
     print(json.dumps({k: v for k, v in metrics.items() if k != "params"}), flush=True)
     print(f"done in {time.time() - t0:.0f}s", flush=True)
     return 0

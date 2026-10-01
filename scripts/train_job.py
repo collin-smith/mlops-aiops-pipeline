@@ -46,7 +46,8 @@ OUT = "/opt/ml/processing/output"
 def entrypoint(max_train_rows: int) -> list[str]:
     cmd = (
         f"cd {IN_CODE} && pip install -q -r {REQUIREMENTS} && "
-        f"python3 -m src.pipeline.train --data {IN_DATA} --out {OUT}"
+        # the Stage 2 model (D-037); the pipeline trains the Stage 5 challenger
+        f"python3 -m src.pipeline.train --feature-set baseline --data {IN_DATA} --out {OUT}"
     )
     if max_train_rows:
         cmd += f" --max-train-rows {max_train_rows}"

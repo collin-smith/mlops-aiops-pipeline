@@ -75,15 +75,31 @@ def test_write_artifacts_packs_model_schema_and_thresholds(tmp_path):
     assert sorted(p.name for p in tmp_path.iterdir()) == ["metrics.json", "model.tar.gz"]
 
 
-def test_train_end_to_end_on_the_fixture(tmp_path, requests_frame):
+@pytest.mark.parametrize("feature_set", ["baseline", "challenger"])
+def test_train_end_to_end_on_the_fixture(tmp_path, requests_frame, feature_set):
     pytest.importorskip("xgboost")
     pytest.importorskip("sklearn")
+    data, comms, out = tmp_path / "data", tmp_path / "communities", tmp_path / "out"
+    data.mkdir()
+    comms.mkdir()
+    requests_frame.to_parquet(data / "part-0.parquet")
+    (comms / "communities.json").write_text(json.dumps([{"comm_code": "X", "sector": "CENTRE"}]))
+    args = ["--data", str(data), "--out", str(out), "--feature-set", feature_set]
+    if feature_set == "challenger":
+        args += ["--communities", str(comms)]
+    assert train.main(args) == 0
+    metrics = json.loads((out / "metrics.json").read_text())
+    assert {"roc_auc", "pr_auc", "top_decile_lift", "n_train", "n_test"} <= set(metrics)
+    assert metrics["feature_set"] == feature_set
+
+
+def test_the_challenger_needs_the_sector_lookup(tmp_path, requests_frame):
+    pytest.importorskip("xgboost")
     data = tmp_path / "data"
     data.mkdir()
     requests_frame.to_parquet(data / "part-0.parquet")
-    assert train.main(["--data", str(data), "--out", str(tmp_path / "out")]) == 0
-    metrics = json.loads((tmp_path / "out" / "metrics.json").read_text())
-    assert {"roc_auc", "pr_auc", "top_decile_lift", "n_train", "n_test"} <= set(metrics)
+    with pytest.raises(SystemExit):
+        train.main(["--data", str(data), "--out", str(tmp_path / "out")])
 
 
 def test_launcher_request_mounts_code_and_data_and_writes_model_artifacts():

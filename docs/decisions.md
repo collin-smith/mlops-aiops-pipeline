@@ -5,6 +5,84 @@ ADR-lite. Newest first. Seeded from the planning docs
 
 ---
 
+## D-043 — Retraining runs from GitHub Actions on demand, and a challenger must beat the approved champion
+
+**Status:** Accepted (2026-09-30).
+
+**Decision:**
+- **`.github/workflows/retrain.yml`** signs in with OIDC (no stored AWS keys), optionally pulls a
+  fresh snapshot (311 requests + the community lookup, `socrata_pull.py`), and runs the same
+  pipeline and gate as a hand-started run. It's **manual only** (`workflow_dispatch`): the
+  monthly schedule stays commented out until the series ends (D-030). It installs the base
+  dependencies only; the pipeline needs no SageMaker SDK (D-040).
+- **The CI role still can't approve** (D-041). It gains only what the workflow needs:
+  `s3:DeleteObject` on `processed/311/*` (a new snapshot replaces the old, D-036),
+  `sagemaker:UpdatePipeline` on this one pipeline, `iam:ListAttachedRolePolicies` on the
+  SageMaker role (the budget hard-stop check), and read access to the SageMaker job logs.
+- A gate rejection ends the run as Failed in SageMaker, but the workflow passes
+  `--allow-rejection` so GitHub shows it as a completed run with the verdict on its summary
+  page: "retrained, correctly not promoted" is a result, not a fault.
+- **Champion / challenger** (`src/promote/champion.py`): the champion is the latest
+  **Approved** version, not the last model trained. Evaluate scores it on the challenger's test
+  year, each model with its own feature set and thresholds, and the gate's fourth condition is
+  "no approved champion, or the challenger's PR-AUC beats it by ≥ 0.005". If the registry can't
+  be read, Evaluate fails: no comparison, no pass. With no champion today, the check passes
+  trivially; the fairness floors are what reject.
+- Retrain metrics (cost, duration, promoted) are **not** added as CloudWatch custom metrics:
+  each costs $0.30 a month, the per-step metrics already carry cost and duration, and the run's
+  summary page carries the verdict. Stage 7 decides whether any is worth a metric.
+**Why:** the outline had CI set the winner to Approved; D-041 took that permission away, so the
+comparison moved into the gate and a person still approves. Manual-only keeps a pause safe.
+**Cost:** one run is the pipeline's ~$0.03, plus a few cents of S3 requests for a fresh snapshot.
+GitHub Actions minutes are free for a public repo.
+
+## D-042 — The Stage 5 challenger: history features, recent years, a per-sector cutoff, and shadow mode when it still fails
+
+**Status:** Accepted (2026-09-30). Amends D-035 (operating point) and D-041 (what happens to a
+rejected model).
+
+**Decision:**
+- **Six history features** (`src/features/history.py`): the category's backlog against its
+  normal 30 days, and recent late rates by category, community, sector, category within sector
+  (90 days) and category within community (180 days). At intake time *t* they count only past
+  requests whose **deadline** (filed time plus the label's category threshold) fell before *t*:
+  by then each one either closed in time or didn't, and both are knowable at *t*. A request's
+  own deadline is after its filing, so its own outcome never counts. Tested for that, and for
+  "rewriting outcomes decided after *t* changes nothing at *t*".
+- **Train on the last 2 years** of the training split. The late rate drifted from 22.9% across
+  the training years to 18.1% in the test year; older years teach an older city.
+- **Operating point: the top 10% within each sector**, not one city-wide cutoff. One cutoff sent
+  the flags to wherever the high-risk categories cluster (13.5% of SOUTHEAST's requests, 8.0% of
+  WEST's). Overall lift doesn't change (2.04 either way on the Stage 2 model), so it costs nothing,
+  but it is a change to how the model would be used, so it's recorded here. It does **not** even
+  out recall by construction: on the Stage 2 model it gives 0.685, because the model also ranks
+  some sectors' requests less well.
+- `train.py --feature-set baseline|challenger` (default challenger); the Stage 2 launcher pins
+  `baseline`. The artifact's `feature_schema.json` records the feature set, and Evaluate rebuilds
+  the same features from the snapshot and the thresholds inside `model.tar.gz`.
+
+**Experiments (local, full data, $0; test year 476,613 requests):**
+
+| Model | Cutoff | PR-AUC | Lift | Sector ratio | srg ratio |
+|---|---|---|---|---|---|
+| Stage 2 | city-wide | 0.327 | 2.04× | 0.548 | 0.700 |
+| Stage 2 | per sector | | 2.05× | 0.685 | |
+| + backlog ratio, category + community late rates, last 2 years | per sector | 0.358 | 2.40× | 0.766 | 0.725 |
+| + sector and category-within-sector late rates | per sector | 0.371 | 2.41× | 0.769 | 0.737 |
+| **+ category-within-community late rate (the challenger)** | per sector | **0.374** | **2.44×** | **0.786** | **0.724** |
+| + sector as a feature | per sector | 0.369 | 2.44× | 0.785 | 0.713 |
+
+**The challenger still fails the gate**, on both dimensions: CENTRE's recall is 0.79 of NORTH's,
+and DEVELOPING communities' is 0.72 of the best growth class's, which no feature moved.
+**Collin chose shadow mode:** the 0.8 floor stays, nothing is approved, and Stage 6 scores open
+requests with the best rejected candidate, labelled not-for-use and feeding nothing operational.
+Stage 7 then watches its per-sector and growth-class recall on real outcomes. The alternatives
+were no scoring at all, a written risk acceptance by the approver, or a lower floor chosen after
+seeing the results.
+**Why:** a better model that's still uneven is exactly the case shadow deployment exists for:
+it earns evidence without anyone acting on it, and the gate keeps meaning what it says.
+**Cost:** $0 so far (local). One pipeline run is about $0.03.
+
 ## D-041 — The Stage 4 promotion gate: thresholds in code, a separate approver role, and a Stage 2 model it rejects
 
 **Status:** Accepted (2026-09-30). Amends D-035.

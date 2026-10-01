@@ -2,7 +2,9 @@
 equally well in every part of the city?
 
 The operating point is the one the model is used at: flag the **top decile** of risk
-scores, with one cutoff for the whole city. For each group of communities we measure:
+scores **within each sector** (D-042). Stage 4 used one cutoff for the whole city, which
+sent the flags to wherever the high-risk categories cluster; ``cutoff_by=None`` still
+gives that. For each group of communities we measure:
 
 * ``recall``    : of the requests that did breach, the share the model flagged. This is
                   the fairness criterion (equal opportunity). A sector where the model
@@ -59,7 +61,8 @@ REPORT_ONLY: dict[str, frozenset[str]] = {"srg": frozenset({"N/A", "FUTURE"})}
 
 @dataclass(frozen=True)
 class FairnessThresholds:
-    top_fraction: float = 0.10  # the triage operating point: top decile, one city-wide cutoff
+    top_fraction: float = 0.10  # the triage operating point: the top decile ...
+    cutoff_by: str | None = "sector"  # ... within each sector (D-042); None = city-wide
     min_group_rows: int = 1_000
     min_group_positives: int = 100
     min_recall_ratio: float = 0.80
@@ -75,6 +78,16 @@ def attach_groups(
     for dim in dims:
         out[dim] = out["comm_code"].map(lookup[dim]).fillna(UNKNOWN).astype(str)
     return out
+
+
+def operating_point(scored: pd.DataFrame, t: FairnessThresholds) -> pd.Series:
+    """Which requests the triage flags: the top ``top_fraction`` of scores, city-wide or
+    within each ``cutoff_by`` group (requests with no community form their own group)."""
+    q = 1 - t.top_fraction
+    if not t.cutoff_by:
+        return scored["pred"] >= scored["pred"].quantile(q)
+    cut = scored.groupby(t.cutoff_by)["pred"].transform(lambda s: s.quantile(q))
+    return scored["pred"] >= cut
 
 
 def group_metrics(df: pd.DataFrame, dim: str, flagged: pd.Series) -> pd.DataFrame:
@@ -111,9 +124,9 @@ def fairness_report(
 ) -> dict:
     """``df`` needs ``breach`` (0/1), ``pred`` (score) and ``comm_code``."""
     t = thresholds or FairnessThresholds()
-    scored = attach_groups(df.dropna(subset=["pred", "breach"]), communities, dims)
-    cutoff = float(scored["pred"].quantile(1 - t.top_fraction))
-    flagged = scored["pred"] >= cutoff
+    groups = tuple(dict.fromkeys((*dims, *([t.cutoff_by] if t.cutoff_by else []))))
+    scored = attach_groups(df.dropna(subset=["pred", "breach"]), communities, groups)
+    flagged = operating_point(scored, t)
 
     dimensions = {}
     for dim in dims:
@@ -159,7 +172,7 @@ def fairness_report(
     return {
         "passed": all(d["passed"] for d in dimensions.values()),
         "thresholds": asdict(t),
-        "cutoff": round(cutoff, 6),
+        "operating_point": {"top_fraction": t.top_fraction, "cutoff_by": t.cutoff_by or "city"},
         "rows": len(scored),
         # Worst case across dimensions: the two paths the Stage 4 ConditionStep reads.
         "recall_ratio": {"value": _worst("recall_ratio")},

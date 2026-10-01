@@ -11,7 +11,8 @@ Three Processing steps, in order (D-039: the account has no Training Job quota):
 then the promotion gate (Stage 4, D-041):
 
     Gate      a Condition step on the two reports: PR-AUC, the sector recall ratio and
-              the lowest group lift must all clear ``GATE``
+              the lowest group lift must all clear ``GATE``, and the model must beat the
+              approved champion by ``GUARDBAND`` if there is one (D-043)
     Register  (if it passes) a new version in the Model Package Group, status
               PendingManualApproval; only the approver role can approve it
     Rejected  (if it doesn't) a Fail step, so the run ends Failed with the numbers in
@@ -34,6 +35,7 @@ snapshot date goes into every step's environment (a new snapshot is a re-run too
 from __future__ import annotations
 
 from src.common.sm_jobs import PROCESSING_INSTANCE_TYPES
+from src.promote.champion import GUARDBAND
 from src.promote.fairness import FairnessThresholds
 
 IN_CODE = "/opt/ml/processing/input/code"
@@ -65,6 +67,12 @@ GATE = {
     "min_group_lift": _FAIR.min_group_lift,
 }
 # JsonGet paths into the Evaluate step's two reports
+# champion / challenger (D-043): passes when there's no approved champion, or the margin
+# clears the guardband. Both values are always numbers in evaluation.json.
+CHAMPION_PATHS = {
+    "champion_exists": ("EvaluationReport", "champion.exists"),
+    "champion_margin": ("EvaluationReport", "champion.margin.value"),
+}
 GATE_PATHS = {
     "pr_auc": ("EvaluationReport", "binary_classification_metrics.pr_auc.value"),
     "recall_ratio": ("FairnessReport", "recall_ratio.value"),
@@ -102,7 +110,7 @@ def run_prefix(bucket: str, step: str) -> dict:
 
 def json_get(key: str) -> dict:
     """The gate's value for ``key``, read from the Evaluate step's report at run time."""
-    file, path = GATE_PATHS[key]
+    file, path = {**GATE_PATHS, **CHAMPION_PATHS}[key]
     return {
         "Std:JsonGet": {
             "PropertyFile": {"Get": f"Steps.Evaluate.PropertyFiles.{file}"},
@@ -122,6 +130,21 @@ def _gate(*, image_uri: str, group: str) -> dict:
         {"Type": "GreaterThanOrEqualTo", "LeftValue": json_get(k), "RightValue": v}
         for k, v in GATE.items()
     ]
+    conditions.append(
+        {
+            "Type": "Or",
+            "Arguments": {
+                "Conditions": [
+                    {"Type": "Equals", "LeftValue": json_get("champion_exists"), "RightValue": 0},
+                    {
+                        "Type": "GreaterThanOrEqualTo",
+                        "LeftValue": json_get("champion_margin"),
+                        "RightValue": GUARDBAND,
+                    },
+                ]
+            },
+        }
+    )
     register = {
         "Name": "Register",
         "Type": "RegisterModel",
@@ -169,7 +192,8 @@ def _gate(*, image_uri: str, group: str) -> dict:
                 "asof": param("AsOf"),
                 "code_uri": param("CodeUri"),
                 "pipeline_execution": {"Get": "Execution.PipelineExecutionId"},
-                "gate": ";".join(f"{k}>={v}" for k, v in GATE.items()),
+                "gate": ";".join(f"{k}>={v}" for k, v in GATE.items())
+                + f";beats_champion_by>={GUARDBAND}",
                 "model_card": MODEL_CARD_URL,
             },
         },
@@ -177,8 +201,10 @@ def _gate(*, image_uri: str, group: str) -> dict:
     values = ["The promotion gate rejected this model. Needed:"]
     values += [f"{k} >= {v}," for k, v in GATE.items()]
     values.append("got:")
+    values.append(f"and beats any approved champion by >= {GUARDBAND},")
     for k in GATE:
         values += [f"{k}", json_get(k)]
+    values += ["champion_margin", json_get("champion_margin")]
     values.append("(see evaluation.json and fairness.json)")
     rejected = {
         "Name": "Rejected",
@@ -299,6 +325,7 @@ def build_definition(
             "Values": [f"s3://{bucket}/raw/communities/asof=", param("AsOf"), "/"],
         }
     }
+    communities = _input("communities", communities_uri, IN_COMMUNITIES)
     common = {"bucket": bucket, "image_uri": image_uri, "role_arn": role_arn, "env": env}
 
     steps = [
@@ -312,8 +339,9 @@ def build_definition(
         ),
         _step(
             "Train",
-            ["train", "--data", IN_DATA, "--out", OUT, "--max-train-rows", param("MaxTrainRows")],
-            [code, data],
+            ["train", "--data", IN_DATA, "--communities", IN_COMMUNITIES, "--out", OUT,
+             "--max-train-rows", param("MaxTrainRows")],
+            [code, data, communities],
             "model",
             depends_on=["Validate"],
             **common,
@@ -321,9 +349,8 @@ def build_definition(
         _step(
             "Evaluate",
             ["evaluate", "--model", IN_MODEL, "--data", IN_DATA,
-             "--communities", IN_COMMUNITIES, "--out", OUT],
-            [code, data, _input("model", model_uri, IN_MODEL),
-             _input("communities", communities_uri, IN_COMMUNITIES)],
+             "--communities", IN_COMMUNITIES, "--out", OUT, "--champion-group", group],
+            [code, data, _input("model", model_uri, IN_MODEL), communities],
             "evaluation",
             depends_on=["Train"],
             **common,

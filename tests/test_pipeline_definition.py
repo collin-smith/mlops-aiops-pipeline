@@ -114,8 +114,9 @@ def test_parameters_carry_the_defaults():
     assert all(p["Type"] == "String" for p in _definition()["Parameters"])
 
 
-def test_evaluate_reads_the_communities_frozen_with_the_snapshot():
-    a = _steps()["Evaluate"]["Arguments"]
+@pytest.mark.parametrize("step", ["Train", "Evaluate"])
+def test_train_and_evaluate_read_the_communities_frozen_with_the_snapshot(step):
+    a = _steps()[step]["Arguments"]
     inputs = {i["InputName"]: i["S3Input"] for i in a["ProcessingInputs"]}
     assert inputs["communities"]["S3Uri"] == {
         "Std:Join": {
@@ -143,8 +144,8 @@ def test_gate_reads_both_reports_evaluate_declares():
     assert {f["OutputName"] for f in files.values()} == {out["OutputName"]}
 
     conds = _gate()["Arguments"]["Conditions"]
-    assert len(conds) == 3
-    for c, (key, floor) in zip(conds, d.GATE.items(), strict=True):
+    assert len(conds) == 4  # three floors, then champion / challenger
+    for c, (key, floor) in zip(conds[:3], d.GATE.items(), strict=True):
         assert c["Type"] == "GreaterThanOrEqualTo"
         assert c["RightValue"] == floor
         get = c["LeftValue"]["Std:JsonGet"]
@@ -173,11 +174,37 @@ def test_gate_paths_exist_in_the_reports_the_code_writes():
         assert isinstance(node, float)
 
 
+def test_champion_check_passes_with_no_champion_or_a_real_win():
+    (check,) = [c for c in _gate()["Arguments"]["Conditions"] if c["Type"] == "Or"]
+    no_champion, wins = check["Arguments"]["Conditions"]
+    assert no_champion["Type"] == "Equals" and no_champion["RightValue"] == 0
+    assert no_champion["LeftValue"]["Std:JsonGet"]["Path"] == "champion.exists"
+    assert wins["Type"] == "GreaterThanOrEqualTo" and wins["RightValue"] == 0.005
+    assert wins["LeftValue"]["Std:JsonGet"]["Path"] == "champion.margin.value"
+    args = _steps()["Evaluate"]["Arguments"]["AppSpecification"]["ContainerArguments"]
+    assert args[args.index("--champion-group") + 1] == "mlops-aiops-breach-risk"
+
+
+def test_champion_paths_exist_as_numbers_with_and_without_a_champion():
+    from src.promote import champion
+
+    for report in (
+        champion.comparison(0.37, None, None),
+        champion.comparison(0.37, {"ModelPackageArn": "arn:mp/1"}, 0.36),
+    ):
+        node = {"champion": report}
+        for _, path in d.CHAMPION_PATHS.values():
+            value = node
+            for part in path.split("."):
+                value = value[part]
+            assert isinstance(value, int | float)
+
+
 def test_gate_thresholds_are_code_not_run_parameters():
     params = {p["Name"] for p in _definition()["Parameters"]}
     assert not params & {"MinPrAuc", "MinRecallRatio", "MinGroupLift"}
     assert d.GATE == {"pr_auc": 0.25, "recall_ratio": 0.8, "min_group_lift": 1.5}
-    assert all(isinstance(c["RightValue"], float) for c in _gate()["Arguments"]["Conditions"])
+    assert all(isinstance(c["RightValue"], float) for c in _gate()["Arguments"]["Conditions"][:3])
 
 
 def test_pass_registers_for_manual_approval_and_fail_registers_nothing():
@@ -197,11 +224,13 @@ def test_pass_registers_for_manual_approval_and_fail_registers_nothing():
     bias = r["ModelMetrics"]["Bias"]["Report"]["S3Uri"]["Std:Join"]["Values"]
     assert bias[-1] == "fairness.json"
     meta = r["CustomerMetadataProperties"]
-    assert meta["gate"] == "pr_auc>=0.25;recall_ratio>=0.8;min_group_lift>=1.5"
+    assert meta["gate"] == (
+        "pr_auc>=0.25;recall_ratio>=0.8;min_group_lift>=1.5;beats_champion_by>=0.005"
+    )
     assert meta["asof"] == {"Get": "Parameters.AsOf"}
     # the failure reason carries the numbers that failed
     values = rejected["Arguments"]["ErrorMessage"]["Std:Join"]["Values"]
-    assert sum("Std:JsonGet" in v for v in values if isinstance(v, dict)) == 3
+    assert sum("Std:JsonGet" in v for v in values if isinstance(v, dict)) == 4
 
 
 def test_definition_is_json_and_rejects_no_quota_instances():
