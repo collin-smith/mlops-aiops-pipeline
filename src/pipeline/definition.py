@@ -199,8 +199,7 @@ def _gate(*, image_uri: str, group: str) -> dict:
     }
     values = ["The promotion gate rejected this model. Needed:"]
     values += [f"{k} >= {v}," for k, v in GATE.items()]
-    values.append("got:")
-    values.append(f"and beats any approved champion by >= {GUARDBAND},")
+    values.append(f"and beating any approved champion by >= {GUARDBAND}; got:")
     for k in GATE:
         values += [f"{k}", json_get(k)]
     values += ["champion_margin", json_get("champion_margin")]

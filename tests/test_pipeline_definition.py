@@ -232,6 +232,10 @@ def test_pass_registers_for_manual_approval_and_fail_registers_nothing():
     # the failure reason carries the numbers that failed
     values = rejected["Arguments"]["ErrorMessage"]["Std:Join"]["Values"]
     assert sum("Std:JsonGet" in v for v in values if isinstance(v, dict)) == 4
+    # every requirement comes before "got:", every number after it
+    words = [v for v in values if isinstance(v, str)]
+    got = next(i for i, w in enumerate(words) if w.endswith("got:"))
+    assert all(">=" not in w for w in words[got + 1 :])
 
 
 def test_definition_is_json_and_rejects_no_quota_instances():

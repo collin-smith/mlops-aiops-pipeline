@@ -41,6 +41,11 @@ ADR-lite. Newest first. Seeded from the planning docs
 - Retrain metrics (cost, duration, promoted) are **not** added as CloudWatch custom metrics:
   each costs $0.30 a month, the per-step metrics already carry cost and duration, and the run's
   summary page carries the verdict. Stage 7 decides whether any is worth a metric.
+**First automated run (2026-09-30, GitHub run 36804454411, pipeline run `vhhhe5vtr34a`):**
+green in 13 minutes on the existing snapshot; Validate 89 s, Train 219 s, Evaluate 119 s billed,
+about $0.026, every job tagged. The challenger reproduced the local run exactly (PR-AUC 0.374,
+lift 2.43×, artifact matches training) with every sector flagged at 10.0%; `champion.exists` 0;
+the gate rejected it on fairness (sector 0.79, CENTRE; growth class 0.72, DEVELOPING).
 **Why:** the outline had CI set the winner to Approved; D-041 took that permission away, so the
 comparison moved into the gate and a person still approves. Manual-only keeps a pause safe.
 **Cost:** one run is the pipeline's ~$0.03, plus a few cents of S3 requests for a fresh snapshot.
