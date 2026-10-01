@@ -106,7 +106,7 @@ NODES: dict[str, tuple] = {
     "socrata":    ("Calgary 311", "Socrata API", "external", "mxgraph.aws4.internet_alt1", 20, 120, 1),
     # y=202 puts pull's lower port level with s3_proc's, so that edge runs straight
     "pull":       ("socrata_pull.py", "local · pull→Parquet", "external", "mxgraph.aws4.command_line_interface", 20, 202, 1),
-    "gha":        ("GitHub Actions", "scheduled retrain", "external", "mxgraph.aws4.git", 20, 470, 5),
+    "gha":        ("GitHub Actions", "manual retrain · OIDC", "external", "mxgraph.aws4.git", 20, 470, 5),
     "drift":      ("inject_drift.py", "local · synthetic drift", "external", "mxgraph.aws4.command_line_interface", 20, 560, 7),
     "s3_raw":     ("S3  raw/", "asof=YYYY-MM-DD", "storage", "mxgraph.aws4.s3", 250, 120, 1),
     "s3_proc":    ("S3  processed/", "partitioned Parquet", "storage", "mxgraph.aws4.s3", 250, 200, 1),
@@ -125,14 +125,13 @@ NODES: dict[str, tuple] = {
     "sm_train":   ("SageMaker Processing", "train · XGBoost · t3.xlarge", "ml", "mxgraph.aws4.sagemaker", 730, 290, 2),
     "registry":   ("SageMaker Model Registry", "Model Package Group", "ml", "mxgraph.aws4.sagemaker", 1210, 120, 4),
     "approver":   ("Approver IAM role", "training role denied", "security", "mxgraph.aws4.identity_and_access_management_iam", 1210, 200, 4),
-    "champ":      ("champion / challenger", "vs approved model", "ml", "mxgraph.aws4.sagemaker", 1210, 290, 5),
     "serverless": ("SageMaker Serverless", "one-off demo · deleted", "ml", "mxgraph.aws4.sagemaker", 1450, 200, 6),
     "cwmetric":   ("CloudWatch metrics", "MLOpsAIOps/Pipeline", "mgmt", "mxgraph.aws4.cloudwatch", 1450, 120, 3),
     "batch":      ("SageMaker Processing", "batch-score open requests", "ml", "mxgraph.aws4.sagemaker", 490, 380, 6),
     "monitor":    ("SageMaker Model Monitor", "baseline + schedule", "ml", "mxgraph.aws4.sagemaker", 970, 380, 7),
     "anomaly":    ("Anomaly detection", "EWMA · pipeline + civic", "compute", "mxgraph.aws4.lambda", 1210, 380, 7),
-    "oidc":       ("IAM OIDC role", "github-actions", "security", "mxgraph.aws4.identity_and_access_management_iam", 250, 470, 5),
-    "ebridge":    ("Amazon EventBridge", "schedules", "mgmt", "mxgraph.aws4.eventbridge", 490, 470, 5),
+    "oidc":       ("IAM OIDC role", "github-actions · can't approve", "security", "mxgraph.aws4.identity_and_access_management_iam", 250, 470, 5),
+    "ebridge":    ("Amazon EventBridge", "schedules", "mgmt", "mxgraph.aws4.eventbridge", 490, 470, 7),
     "iam":        ("IAM roles", "sagemaker · glue", "security", "mxgraph.aws4.identity_and_access_management_iam", 250, 560, 1),
     "cwlog":      ("CloudWatch Logs", "StepFailure alarm", "mgmt", "mxgraph.aws4.cloudwatch", 490, 560, 1),
     "sns":        ("Amazon SNS", "alerts", "mgmt", "mxgraph.aws4.simple_notification_service", 730, 560, 1),
@@ -161,11 +160,8 @@ EDGES: list[tuple] = [
     ("sm_eval", "cond", "evaluation + fairness", 4, False),
     ("cond", "registry", "register if pass", 4, False),
     ("approver", "registry", "approve / reject", 4, False),
-    ("ebridge", "gha", "", 5, False),
     ("gha", "oidc", "OIDC", 5, False),
     ("oidc", "sm_pipe", "", 5, False),
-    ("sm_pipe", "champ", "", 5, False),
-    ("champ", "registry", "promote / deprecate", 5, False),
     ("registry", "batch", "approved model", 6, False),
     ("registry", "serverless", "", 6, True),
     ("batch", "s3_score", "", 6, False),
@@ -200,6 +196,13 @@ EDGE_ROUTES: dict[tuple, tuple] = {
     ("s3_proc", "sm_train"): ("exitX=0.85;exitY=1;entryX=0.5;entryY=0;", _lane_into_top("s3_proc", "sm_train")),
     ("s3_proc", "sm_proc"):  ("exitX=0.85;exitY=1;entryX=0.5;entryY=0;", _lane_into_top("s3_proc", "sm_proc")),
     ("s3_proc", "sm_eval"):  ("exitX=0.85;exitY=1;entryX=0.5;entryY=0;", _lane_into_top("s3_proc", "sm_eval")),
+    # Stage 5: up out of the OIDC role, along the gap under the batch row, then up the lane
+    # just left of the pipeline's column (Athena, Train and ECR sit in it) into its left side
+    ("oidc", "sm_pipe"):     ("exitX=0.5;exitY=0;entryX=0;entryY=0.5;", lambda p: [
+        (p("oidc")[0] + 24, p("oidc")[1] - 25),
+        (p("sm_pipe")[0] - 18, p("oidc")[1] - 25),
+        (p("sm_pipe")[0] - 18, p("sm_pipe")[1] + 24),
+    ]),
 }
 # Routes that change once the Stage 3 steps share the training row: model-artifacts is
 # reached under the validate step, and ECR (now below train) feeds it from underneath.
@@ -228,6 +231,8 @@ REGISTRY_ROUTES: dict[tuple, tuple] = {
 ARTICLE_NODES: dict[str, tuple] = {
     # D-041: a model that fails the gate ends the run here, and nothing is registered
     "fail": ("Fail step", "rejected · nothing registered", "security", "mxgraph.aws4.sagemaker", 0, 0, 4),
+    # D-043: the champion check is the gate's fourth condition, read inside Evaluate
+    "champ": ("champion / challenger", "beat the approved by ≥ 0.005", "ml", "mxgraph.aws4.sagemaker", 0, 0, 5),
 }
 # Article views: one stage's change, at a size that reads in a ~700 px article column.
 # Positions are this view's own; edges are listed explicitly with their routes.
@@ -281,6 +286,22 @@ ARTICLE_VIEWS = {
         "note": "The gate needs PR-AUC ≥ 0.25, sector recall ratio ≥ 0.8 and every group's lift ≥ 1.5. "
                 "Registered versions wait as PendingManualApproval; the training role is explicitly denied "
                 "approval. Validate and Train run as in Stage 3.",
+    },
+    5: {
+        "nodes": {
+            "gha": (60, 110), "oidc": (400, 110), "sm_pipe": (740, 110),
+            "registry": (60, 260), "champ": (400, 260), "cond": (740, 260),
+        },
+        "edges": [
+            ("gha", "oidc", "no stored keys", _BOTTOM, None),
+            ("oidc", "sm_pipe", "start a run", _BOTTOM, None),
+            ("sm_pipe", "cond", "evaluate", "exitX=0.5;exitY=1;entryX=0.5;entryY=0;", None),
+            ("registry", "champ", "latest Approved", _BOTTOM, None),
+            ("champ", "cond", "margin", _BOTTOM, None),
+        ],
+        "note": "Started by hand; the monthly schedule stays off until the series ends. The challenger adds "
+                "history features and flags the top 10% within each sector. It still fails the fairness "
+                "floors, so nothing is approved: it runs in shadow mode (Stage 6).",
     },
 }
 
