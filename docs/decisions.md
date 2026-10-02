@@ -44,18 +44,32 @@ tested locally; not yet applied or run on AWS. Amends D-029 (what the demo serve
   a 30-minute limit, the project tag, the budget check first. It runs `src.deploy.score`
   directly, not through `src.pipeline.step`, so it adds no CloudWatch metrics. The job also
   writes the demo's payload: the features and batch scores of the five highest-scored rows.
-- **The Serverless demo stays, smaller** (D-029 amended). It serves the shadow version with
-  `src/deploy/inference.py`, because the built-in handler reads a numeric CSV and this model's
-  categorical features would be read as numbers. It sends the batch job's payload and checks
-  each real-time score against the batch score. The handler imports nothing from `src` and a
-  test holds its scores equal to the batch path's. The point it makes: the six history
-  features need the whole request history, so a real-time caller would need a feature store.
+- **The Serverless demo stays, smaller** (D-029 amended). It serves the shadow version on the
+  image's **default** handler, which reads a headerless numeric CSV. Each category travels as
+  its code in the model's own level order (`feature_schema.json`); unseen values go empty.
+  Locally, on 20,000 test rows, that gives the batch scores exactly (max difference 0.0); codes
+  in any other order are off by up to 0.99 (mean 0.19) with no error. It sends the batch job's
+  payload and checks each real-time score against the batch score. The point it makes: the six
+  history features need the whole request history, so a real-time caller would need a
+  feature store. **First attempt (2026-10-01) failed:** a custom handler (`SAGEMAKER_PROGRAM` +
+  `inference.py`) switches this image to its script-mode server, which writes
+  `/etc/sagemaker-nginx.conf`; Serverless containers can't ("PermissionError"), the endpoint sat
+  in Creating past the 10-minute wait, ended Failed, and was deleted by hand (`--cleanup-only`).
+  The demo now waits up to 15 minutes, waits out Creating before deleting, and serves a copy of
+  the model holding only `xgboost-model` so the default loader can't pick up the schema file.
 **Local run (2026-10-01, $0):** the challenger retrained locally reproduces `vhhhe5vtr34a`
 (PR-AUC 0.374, lift 2.43×). Scoring the 2026-09-23 snapshot took 22 s: 14,714 open requests
 inside their deadline, 1,477 flagged (10% of each sector), 2.4% in categories the model never
 saw.
-**Cost:** registration, the group, the table and the views cost nothing. One scoring run is a
-few minutes of ml.t3.xlarge, about $0.01–0.02. The demo is cents, and deletes what it creates.
+**On AWS (2026-10-01):** applied (3 added). Registration was refused twice before it worked,
+at no cost: the per-dimension recall ratios are `{"value": x}` in `fairness.json`, and
+`CreateModelPackage` refuses tags on a version ("add them to the Model Package Group"; the
+group has them). Scored the fresh 2026-10-01 snapshot: 14,465 rows, 1,453 flagged, 2.7% unseen
+categories, 104 s billed ($0.0064). The ★ query read 155.75 KB. Its top 20 are mostly two
+chronic-backlog request types (traffic-signal lane designation signs, new bike racks): the
+model's strongest signal is the category.
+**Cost:** registration, the group, the table and the views cost nothing. One scoring run is
+about $0.01. The demo is cents, and deletes what it creates.
 
 ## D-043 — Retraining runs from GitHub Actions on demand, and a challenger must beat the approved champion
 

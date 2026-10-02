@@ -1,9 +1,10 @@
 # Model card — 311 SLA-breach triage
 
 *Updated at every promotion and linked from each Model Package's metadata. No version is
-promoted yet: the only candidate so far, the Stage 2 model, was **rejected by the promotion
-gate** on 2026-09-30 (pipeline run `wm2m10zouect`, D-041). Its numbers are below, because a
-rejected model's card is part of the record too.*
+promoted yet. Two candidates have been **rejected by the promotion gate**: the Stage 2 model
+(run `wm2m10zouect`, D-041), whose numbers are below, and the Stage 5 challenger (run
+`vhhhe5vtr34a`, D-042), which now scores in shadow (see "Shadow deployment"). A rejected
+model's card is part of the record too.*
 
 | | |
 |---|---|
@@ -84,8 +85,10 @@ because of the August 2025 backlog purge; graffiti and transit passes are under-
 - Proxy label (above).
 - Intake-time features only — no crew capacity, weather, or work-order detail, which are
   likely the real drivers of long resolutions. Expect modest AUC.
-- Taxonomy drift: `service_name` values are renamed/merged over time; an alias map is
-  applied but new categories fall back to a global threshold.
+- Taxonomy drift: `service_name` values are renamed, split and added over time. There is
+  no alias map (D-037: automatic matching merged unrelated requests); a category the model
+  never saw falls back to a global threshold. 2.7% of the requests scored on 2026-10-01 were
+  in such categories.
 - Trained on a snapshot; production behaviour depends on the retrain cadence (Stage 5).
 - Community coverage: communities with `< N` historical requests get noisy thresholds.
 
@@ -97,6 +100,29 @@ operational health (run duration, cost, failure rate) is watched separately (Sta
 
 ## Retraining
 
-Scheduled monthly (GitHub Actions, Stage 5). A challenger is promoted only if it beats the
-**currently-approved** model on a frozen holdout by more than the guardband (`0.005` PR-AUC).
-On promotion the previous version is marked `Deprecated`.
+On demand from GitHub Actions (`retrain.yml`, D-043); the monthly schedule is written but
+off. A challenger reaches the registry only if it clears the gate, including beating the
+**currently approved** model's PR-AUC by at least the guardband (0.005). It arrives
+`PendingManualApproval`, and a person decides under the approver role; CI can't approve.
+
+## Shadow deployment (Stage 6, D-044)
+
+The Stage 5 challenger (six history features, last 2 years, top 10% flagged per sector) failed
+fairness: sector recall ratio 0.79 (lowest CENTRE), growth class 0.72 (lowest DEVELOPING),
+floor 0.8. It is **not approved and not for use**. It is registered in a separate group,
+`mlops-aiops-breach-risk-shadow` (version 1, status Rejected, metadata
+`usage = shadow-not-for-use`), which no project role can approve.
+
+It scores open requests still inside their category's deadline, as a Processing job
+(`scripts/score_job.py`). Every row it writes carries `usage = shadow-not-for-use` and the
+package ARN, in the Athena table `shadow_scores`; nothing operational reads it. Stage 7 grades
+the scores against real outcomes through the view `shadow_outcomes`.
+
+| Shadow run | Snapshot | Scored | Flagged | Unseen categories | Billed |
+|---|---|---:|---:|---:|---:|
+| `mlops-aiops-score-20261001-235814` | 2026-10-01 | 14,465 | 1,453 (10% per sector) | 2.7% | 104 s, $0.0064 |
+
+Test-year numbers for this model: ROC-AUC 0.710, PR-AUC 0.374, top-decile lift 2.43× (44.1% of
+flagged requests run late). On the same test year, sharing the 10% quota by sector **and**
+growth class brings the growth-class ratio to 0.86 with no loss of lift; the sector ratio
+(0.785) still fails, on CENTRE. Not adopted: noted for Stage 7.

@@ -13,14 +13,21 @@ Why Serverless and not a provisioned endpoint: Serverless bills per invocation a
 idle charge. Provisioned concurrency would bring the idle charge back, so this script never
 sets it and ci.yml fails the build if the setting appears anywhere.
 
-What it serves (D-044): the newest version in the shadow group, the model the gate rejected,
-so every response says ``usage: shadow-not-for-use``. The built-in container's default
-handler can't read this model's categorical features, so the model runs with
-``src/deploy/inference.py``, packed as ``sourcedir.tar.gz``. The payload is the
-``payload.json`` the batch scoring job wrote: a few scored rows, with the features the batch
-job computed. A real-time caller couldn't compute the history features from one request,
-which is the point the demo makes. The script checks each real-time score against the
-batch score for the same row.
+What it serves (D-044): the newest version in the shadow group, the model the gate rejected;
+every line it prints says ``shadow-not-for-use``. It runs on the image's **default** handler,
+which reads a headerless CSV of numbers. This model was trained on categorical columns, so
+each category travels as its code in the model's own level order (``feature_schema.json``),
+and a category the model never saw is sent empty. Codes in any other order give wrong scores
+with no error, which is why the conversion uses the schema and a test checks it. A custom
+handler (``SAGEMAKER_PROGRAM``) isn't an option on Serverless with this image: its script-mode
+server writes ``/etc/sagemaker-nginx.conf`` and Serverless containers can't (first run,
+2026-10-01: "PermissionError"). The endpoint serves a copy of the model that holds only
+``xgboost-model``, so the default loader can't pick up the schema file instead.
+
+The payload is the ``payload.json`` the batch scoring job wrote: a few scored rows, with the
+features the batch job computed. A real-time caller couldn't compute the history features
+from one request, which is the point the demo makes. Each real-time score is checked against
+the batch score for the same row.
 
     ROLE=$(terraform -chdir=infra output -raw sagemaker_role_arn)
     aws s3 cp s3://$MLOPS_BUCKET/scored-reports/<score job>/payload.json .
@@ -36,6 +43,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import math
 import statistics
 import sys
 import tarfile
@@ -50,9 +58,11 @@ from src.common.config import aws_tags, get_config  # noqa: E402
 from src.common.guards import budget_hardstop_active  # noqa: E402
 from src.deploy import shadow  # noqa: E402
 
-HANDLER = Path(__file__).resolve().parents[1] / "src" / "deploy" / "inference.py"
+MODEL_FILE = "xgboost-model"
 # agreement with the batch score; the two run the same booster on the same features
 SCORE_TOLERANCE = 1e-4
+# Serverless with a failing container takes 10+ minutes to give up; wait up to 15
+WAIT = {"Delay": 15, "MaxAttempts": 60}
 
 # Serverless limits: memory 1024–6144 MB in 1 GB steps; concurrency 1–200.
 MEMORY_MB = 2048
@@ -95,26 +105,44 @@ def read_payload(path: Path, n: int) -> list[tuple[dict, float]]:
     return list(zip(data["rows"], data["batch_scores"], strict=True))[:n]
 
 
-def handler_tarball(handler: Path = HANDLER) -> bytes:
-    """sourcedir.tar.gz: the inference handler alone, at the archive's root."""
+def csv_row(row: dict, schema: dict) -> str:
+    """One payload row as the default handler's CSV: columns in training order, each
+    category as its code in the model's level order, unseen or missing values empty."""
+    values = []
+    for col in schema["columns"]:
+        v = row.get(col)
+        if col in schema["categories"]:
+            levels = schema["categories"][col]
+            v = levels.index(str(v)) if v is not None and str(v) in levels else None
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            values.append("")
+        else:
+            values.append(repr(float(v)) if isinstance(v, float) else str(v))
+    return ",".join(values)
+
+
+def read_artifact(model_tar: bytes) -> tuple[dict, bytes]:
+    """The feature schema and the booster's bytes from a model.tar.gz."""
+    with tarfile.open(fileobj=io.BytesIO(model_tar)) as tar:
+        schema = json.load(tar.extractfile("feature_schema.json"))
+        booster = tar.extractfile(MODEL_FILE).read()
+    return schema, booster
+
+
+def model_only_tarball(booster: bytes) -> bytes:
+    """model.tar.gz with the booster alone, so the default loader has one file to load."""
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-        tar.add(handler, arcname="inference.py")
+        info = tarfile.TarInfo(MODEL_FILE)
+        info.size = len(booster)
+        tar.addfile(info, io.BytesIO(booster))
     return buf.getvalue()
 
 
-def container(desc: dict, source_uri: str, region: str) -> dict:
-    """The shadow version's image and model, run with our handler."""
+def container(desc: dict, model_url: str) -> dict:
+    """The shadow version's image, serving the model-only copy with the default handler."""
     (spec,) = desc["InferenceSpecification"]["Containers"]
-    return {
-        "Image": spec["Image"],
-        "ModelDataUrl": spec["ModelDataUrl"],
-        "Environment": {
-            "SAGEMAKER_PROGRAM": "inference.py",
-            "SAGEMAKER_SUBMIT_DIRECTORY": source_uri,
-            "SAGEMAKER_REGION": region,
-        },
-    }
+    return {"Image": spec["Image"], "ModelDataUrl": model_url}
 
 
 def summarize_latencies(ms: list[float]) -> dict[str, float]:
@@ -125,6 +153,20 @@ def summarize_latencies(ms: list[float]) -> dict[str, float]:
         "warm_median_ms": round(statistics.median(warm), 1) if warm else float("nan"),
         "calls": len(ms),
     }
+
+
+def settle(sm, name: str, poll_seconds: int = 20, max_polls: int = 45) -> None:
+    """Wait while the endpoint is still Creating or Updating: it can't be deleted until then.
+    The first run's cleanup failed this way after a 10-minute wait (2026-10-01)."""
+    for _ in range(max_polls):
+        try:
+            status = sm.describe_endpoint(EndpointName=name)["EndpointStatus"]
+        except ClientError:
+            return  # not there (never created, or already gone)
+        if status not in ("Creating", "Updating"):
+            return
+        print(f"endpoint is {status}; waiting before deleting it…")
+        time.sleep(poll_seconds)
 
 
 def cleanup(sm, name: str) -> None:
@@ -173,47 +215,45 @@ def main(argv: list[str] | None = None) -> int:
     print(f"serving {desc['ModelPackageArn']} (usage={shadow.USAGE})")
 
     s3 = boto3.client("s3", region_name=cfg.region)
-    key = f"code/{name}/sourcedir.tar.gz"
-    s3.put_object(Bucket=cfg.bucket, Key=key, Body=handler_tarball())
+    (spec,) = desc["InferenceSpecification"]["Containers"]
+    bucket, key = spec["ModelDataUrl"].removeprefix("s3://").split("/", 1)
+    schema, booster = read_artifact(s3.get_object(Bucket=bucket, Key=key)["Body"].read())
+    model_key = f"code/{name}/model.tar.gz"  # the same booster bytes, alone in the archive
+    s3.put_object(Bucket=cfg.bucket, Key=model_key, Body=model_only_tarball(booster))
     runtime = boto3.client("sagemaker-runtime", region_name=cfg.region)
     tags = aws_tags()
     try:
         sm.create_model(
             ModelName=name,
             ExecutionRoleArn=args.role_arn,
-            PrimaryContainer=container(desc, f"s3://{cfg.bucket}/{key}", cfg.region),
+            PrimaryContainer=container(desc, f"s3://{cfg.bucket}/{model_key}"),
             Tags=tags,
         )
         sm.create_endpoint_config(**endpoint_config_request(name, name, cfg.project))
         sm.create_endpoint(EndpointName=name, EndpointConfigName=name, Tags=tags)
         print("waiting for endpoint to be InService (a few minutes)…")
-        sm.get_waiter("endpoint_in_service").wait(
-            EndpointName=name, WaiterConfig={"Delay": 15, "MaxAttempts": 40}
-        )
+        sm.get_waiter("endpoint_in_service").wait(EndpointName=name, WaiterConfig=WAIT)
 
         latencies: list[float] = []
         mismatches = 0
         for row, batch in rows:
             t0 = time.perf_counter()
             resp = runtime.invoke_endpoint(
-                EndpointName=name,
-                ContentType="application/json",
-                Accept="application/json",
-                Body=json.dumps({"rows": [row]}),
+                EndpointName=name, ContentType="text/csv", Body=csv_row(row, schema)
             )
             latencies.append((time.perf_counter() - t0) * 1000)
-            body = json.loads(resp["Body"].read())
-            (live,) = body["scores"]
+            live = float(resp["Body"].read().decode().strip().split(",")[0])
             same = abs(live - batch) <= SCORE_TOLERANCE
             mismatches += not same
             print(
-                f"  {body['usage']}  score {live:.4f}  batch {batch:.4f}  "
+                f"  {shadow.USAGE}  score {live:.4f}  batch {batch:.4f}  "
                 f"{'match' if same else 'MISMATCH'}  ({latencies[-1]:.0f} ms)"
             )
         print(summarize_latencies(latencies))
         if mismatches:
             print(f"!! {mismatches} real-time score(s) differ from the batch job's")
     finally:
+        settle(sm, name)
         cleanup(sm, name)
     return 0
 

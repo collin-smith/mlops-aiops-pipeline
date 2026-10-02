@@ -48,17 +48,56 @@ def test_read_payload_pairs_rows_with_batch_scores_and_rejects_csv(tmp_path):
         demo.read_payload(csv, 5)
 
 
-def test_handler_tarball_holds_only_the_handler_at_its_root():
-    with tarfile.open(fileobj=io.BytesIO(demo.handler_tarball())) as tar:
-        assert tar.getnames() == ["inference.py"]
+SCHEMA = {
+    "columns": ["service_name", "cat_late_90d", "req_dow"],
+    "categories": {"service_name": ["Pothole Repair", "Tree Concern"]},
+}
 
 
-def test_container_runs_the_shadow_model_with_our_handler():
+def test_csv_row_sends_codes_in_the_models_level_order():
+    row = {"req_dow": 4, "service_name": "Tree Concern", "cat_late_90d": 0.25}
+    assert demo.csv_row(row, SCHEMA) == "1,0.25,4"  # training column order, Tree Concern = 1
+
+
+def test_csv_row_sends_unseen_and_missing_values_empty():
+    assert demo.csv_row({"service_name": "Brand New", "cat_late_90d": None}, SCHEMA) == ",,"
+    assert demo.csv_row({"service_name": None, "cat_late_90d": float("nan")}, SCHEMA) == ",,"
+
+
+def test_model_only_tarball_round_trips_the_booster_alone():
+    booster = b"\x00ubj-model-bytes"
+    full = io.BytesIO()
+    with tarfile.open(fileobj=full, mode="w:gz") as tar:
+        for name, data in (("xgboost-model", booster), ("feature_schema.json", b"{}")):
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    schema, got = demo.read_artifact(full.getvalue())
+    assert schema == {} and got == booster
+    with tarfile.open(fileobj=io.BytesIO(demo.model_only_tarball(got))) as tar:
+        assert tar.getnames() == ["xgboost-model"]
+        assert tar.extractfile("xgboost-model").read() == booster
+
+
+def test_container_uses_the_default_handler():
     desc = {"InferenceSpecification": {"Containers": [{"Image": "img", "ModelDataUrl": "s3://m"}]}}
-    c = demo.container(desc, "s3://b/code/x/sourcedir.tar.gz", "ca-central-1")
-    assert c["Image"] == "img" and c["ModelDataUrl"] == "s3://m"
-    assert c["Environment"]["SAGEMAKER_PROGRAM"] == "inference.py"
-    assert c["Environment"]["SAGEMAKER_SUBMIT_DIRECTORY"] == "s3://b/code/x/sourcedir.tar.gz"
+    c = demo.container(desc, "s3://b/code/x/model.tar.gz")
+    assert c == {"Image": "img", "ModelDataUrl": "s3://b/code/x/model.tar.gz"}
+    assert "Environment" not in c  # SAGEMAKER_PROGRAM breaks on Serverless with this image
+
+
+class _Settling:
+    def __init__(self, statuses):
+        self.statuses = list(statuses)
+
+    def describe_endpoint(self, EndpointName):  # noqa: N803
+        return {"EndpointStatus": self.statuses.pop(0)}
+
+
+def test_settle_waits_out_creating_before_cleanup():
+    sm = _Settling(["Creating", "Creating", "Failed"])
+    demo.settle(sm, "x", poll_seconds=0)
+    assert sm.statuses == []
 
 
 def test_summarize_latencies_splits_cold_from_warm():

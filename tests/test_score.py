@@ -1,20 +1,26 @@
 """Stage 6 shadow scoring (D-044): which rows get a score, the flag, the output's labels, and
-the Serverless handler agreeing with the batch job. No AWS calls.
+the Serverless demo's CSV agreeing with the batch job. No AWS calls.
 
 The end-to-end tests need xgboost and scikit-learn (the `ml` extra) and skip without them.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import json
-import tarfile
+from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
-from src.deploy import inference, score
-from src.features.build_features import align_to_schema
+from src.deploy import score
 from src.features.build_labels import overdue_open
+
+_PATH = Path(__file__).resolve().parents[1] / "scripts" / "serverless_demo.py"
+_spec = importlib.util.spec_from_file_location("serverless_demo", _PATH)
+demo = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(demo)
 
 THRESHOLDS = pd.Series({"Pothole Repair": 5.0, "Tree Concern": 60.0, "__global__": 10.0})
 ASOF = pd.Timestamp("2026-09-24", tz="UTC")
@@ -86,31 +92,6 @@ def test_flag_takes_the_top_tenth_of_every_sector():
     assert top == [0.599, 0.099]
 
 
-def test_handler_alignment_matches_batch_alignment():
-    schema = {
-        "columns": ["service_name", "cat_late_90d", "req_dow"],
-        "categories": {"service_name": ["Pothole Repair", "Tree Concern"]},
-    }
-    frame = pd.DataFrame(
-        {
-            "req_dow": [1, 2, 3],
-            "service_name": ["Tree Concern", "Unseen", None],
-            "cat_late_90d": [0.2, None, 0.5],
-        }
-    )
-    batch = align_to_schema(frame, schema)
-    # what the endpoint gets: the same rows after a trip through JSON
-    sent = pd.DataFrame.from_records(json.loads(frame.to_json(orient="records")))
-    live = inference.align(sent, schema)
-    pd.testing.assert_frame_equal(live, batch, check_dtype=False)
-    assert batch["service_name"].cat.codes.tolist() == [1, -1, -1]  # unseen -> missing
-
-
-def test_handler_refuses_csv():
-    with pytest.raises(ValueError):
-        inference.input_fn("1,2,3", "text/csv")
-
-
 # --- end to end on the fixture: train a challenger, score with its artifact ---
 
 
@@ -170,18 +151,21 @@ def test_scoring_twice_gives_identical_output(scored_run):
     pd.testing.assert_frame_equal(a, b)
 
 
-def test_the_serverless_handler_reproduces_the_batch_scores(scored_run, tmp_path):
+def test_the_demo_csv_reproduces_the_batch_scores(scored_run):
+    """The Serverless demo sends each payload row as CSV codes to the image's default
+    handler, which builds a plain DMatrix and predicts without checking feature names. That
+    path must give the batch job's scores exactly."""
+    import xgboost as xgb
+
     _, _, payload = _score(scored_run)
-    unpacked = tmp_path / "unpacked"
-    with tarfile.open(scored_run["model"] / "model.tar.gz") as tar:
-        tar.extractall(unpacked, filter="data")
-    model = inference.model_fn(str(unpacked))
-    frame = inference.input_fn(json.dumps({"rows": payload["rows"]}), "application/json")
-    body, content_type = inference.output_fn(inference.predict_fn(frame, model), "application/json")
-    assert content_type == "application/json"
-    response = json.loads(body)
-    assert response["usage"] == "shadow-not-for-use"
-    assert response["scores"] == pytest.approx(payload["batch_scores"], abs=1e-5)
+    tar = (scored_run["model"] / "model.tar.gz").read_bytes()
+    schema, booster_bytes = demo.read_artifact(tar)
+    booster = xgb.Booster()
+    booster.load_model(bytearray(booster_bytes))
+    lines = [demo.csv_row(r, schema) for r in payload["rows"]]
+    arr = np.array([[float(v) if v else np.nan for v in ln.split(",")] for ln in lines])
+    live = booster.predict(xgb.DMatrix(arr), validate_features=False)
+    assert live.tolist() == pytest.approx(payload["batch_scores"], abs=1e-5)
 
 
 def test_main_writes_only_parquet_where_the_table_reads(scored_run, tmp_path):
