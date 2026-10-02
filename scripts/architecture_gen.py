@@ -63,7 +63,7 @@ _RESICON = {
     "cond":        "sagemaker",
     "fail":        "sagemaker",
     "registry":    "sagemaker",
-    "serverless":  "sagemaker",
+    "shadow":      "sagemaker",
     "champ":       "sagemaker",
     "batch":       "sagemaker",
     "monitor":     "sagemaker",
@@ -111,7 +111,7 @@ NODES: dict[str, tuple] = {
     "s3_raw":     ("S3  raw/", "asof=YYYY-MM-DD", "storage", "mxgraph.aws4.s3", 250, 120, 1),
     "s3_proc":    ("S3  processed/", "partitioned Parquet", "storage", "mxgraph.aws4.s3", 250, 200, 1),
     "s3_model":   ("S3  model-artifacts/", "model.tar.gz", "storage", "mxgraph.aws4.s3", 250, 290, 2),
-    "s3_score":   ("S3  scored/", "+ Athena view", "storage", "mxgraph.aws4.s3", 250, 370, 6),
+    "s3_score":   ("S3  scored/", "shadow_scores · not for use", "storage", "mxgraph.aws4.s3", 250, 370, 6),
     "sm_pipe":    ("SageMaker Pipeline", "validate → train → evaluate · cached", "ml", "mxgraph.aws4.sagemaker", 730, 120, 3),
     "glue":       ("AWS Glue", "Catalog + Crawler", "analytics", "mxgraph.aws4.glue", 490, 200, 1),
     "athena":     ("Amazon Athena", "2 GB scan cap", "analytics", "mxgraph.aws4.athena", 730, 200, 1),
@@ -125,9 +125,11 @@ NODES: dict[str, tuple] = {
     "sm_train":   ("SageMaker Processing", "train · XGBoost · t3.xlarge", "ml", "mxgraph.aws4.sagemaker", 730, 290, 2),
     "registry":   ("SageMaker Model Registry", "Model Package Group", "ml", "mxgraph.aws4.sagemaker", 1210, 120, 4),
     "approver":   ("Approver IAM role", "training role denied", "security", "mxgraph.aws4.identity_and_access_management_iam", 1210, 200, 4),
-    "serverless": ("SageMaker Serverless", "one-off demo · deleted", "ml", "mxgraph.aws4.sagemaker", 1450, 200, 6),
+    # D-044: the rejected challenger, in a group of its own that no role can approve. (The
+    # Serverless demo that used to sit here was tried and dropped: D-029 withdrawn.)
+    "shadow":     ("Shadow model group", "rejected · never approved", "ml", "mxgraph.aws4.sagemaker", 1450, 200, 6),
     "cwmetric":   ("CloudWatch metrics", "MLOpsAIOps/Pipeline", "mgmt", "mxgraph.aws4.cloudwatch", 1450, 120, 3),
-    "batch":      ("SageMaker Processing", "batch-score open requests", "ml", "mxgraph.aws4.sagemaker", 490, 380, 6),
+    "batch":      ("SageMaker Processing", "shadow-score open requests", "ml", "mxgraph.aws4.sagemaker", 490, 380, 6),
     "monitor":    ("SageMaker Model Monitor", "baseline + schedule", "ml", "mxgraph.aws4.sagemaker", 970, 380, 7),
     "anomaly":    ("Anomaly detection", "EWMA · pipeline + civic", "compute", "mxgraph.aws4.lambda", 1210, 380, 7),
     "oidc":       ("IAM OIDC role", "github-actions · can't approve", "security", "mxgraph.aws4.identity_and_access_management_iam", 250, 470, 5),
@@ -162,8 +164,7 @@ EDGES: list[tuple] = [
     ("approver", "registry", "approve / reject", 4, False),
     ("gha", "oidc", "OIDC", 5, False),
     ("oidc", "sm_pipe", "", 5, False),
-    ("registry", "batch", "approved model", 6, False),
-    ("registry", "serverless", "", 6, True),
+    ("shadow", "batch", "shadow model", 6, False),
     ("batch", "s3_score", "", 6, False),
     ("s3_score", "athena", "", 6, False),
     ("s3_proc", "monitor", "baseline", 7, False),
@@ -225,6 +226,12 @@ REGISTRY_ROUTES: dict[tuple, tuple] = {
         (p("registry")[0] - 20, p("registry")[1] + 24),
     ]),
     ("approver", "registry"): ("exitX=0.5;exitY=0;entryX=0.5;entryY=1;", None),
+    # Stage 6: down the shadow group's empty column, then left along the gap above the batch
+    # row (10 px above the Train -> model-artifacts lane), into the top of the scoring job
+    ("shadow", "batch"): ("exitX=0.5;exitY=1;entryX=0.5;entryY=0;", lambda p: [
+        (p("shadow")[0] + 24, p("batch")[1] - 31),
+        (p("batch")[0] + 24, p("batch")[1] - 31),
+    ]),
 }
 # Nodes that only an article view draws. The Fail step is a pipeline detail the full
 # pages leave out: they have no free slot for it that later stages don't need.
@@ -305,6 +312,23 @@ ARTICLE_VIEWS = {
                 "history features and flags the top 10% within each sector. It still fails the fairness "
                 "floors, so nothing is approved: it runs in shadow mode (Stage 6).",
     },
+    6: {
+        "nodes": {
+            "s3_proc": (60, 110), "batch": (400, 110), "shadow": (740, 110),
+            "s3_score": (400, 260), "athena": (740, 260),
+        },
+        "edges": [
+            ("s3_proc", "batch", "open requests", _BOTTOM, None),
+            # right to left along the icons' lower edge, under the batch job's label
+            ("shadow", "batch", "shadow model", "exitX=0;exitY=1;entryX=1;entryY=1;", None),
+            ("batch", "s3_score", "usage = not-for-use", "exitX=0.5;exitY=1;entryX=0.5;entryY=0;", None),
+            ("s3_score", "athena", "shadow_scores", _BOTTOM, None),
+        ],
+        "note": "The rejected Stage 5 challenger, registered as Rejected in its own group, which no role can "
+                "approve. It scores only open requests still inside their deadline; nothing operational reads "
+                "the scores. Stage 7 grades them against real outcomes. A Serverless real-time demo was tried "
+                "and dropped: AWS's XGBoost image can't serve on Serverless.",
+    },
 }
 
 # node -> (last stage, (x, y)): where a node sat on the pages up to that stage
@@ -316,7 +340,7 @@ STAGE_NAMES = {
     3: "From Notebook to Pipeline",
     4: "Model Registry & Governance Gate",
     5: "CI/CD — Automated Retraining",
-    6: "Deployment (Batch Transform)",
+    6: "Shadow Scoring",
     7: "Watching the Watcher (AIOps)",
     8: "The Findings & the Pitch",
 }
