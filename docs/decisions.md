@@ -7,9 +7,9 @@ ADR-lite. Newest first. Seeded from the planning docs
 
 ## D-044 — Shadow scoring: a separate model group, open requests still inside their deadline, every row labelled not-for-use
 
-**Status:** Accepted (2026-10-01), Collin's choices on the model's home and the demo. Built and
-tested locally; not yet applied or run on AWS. Amends D-029 (what the demo serves) and D-039
-(scoring is a Processing job outside the pipeline).
+**Status:** Accepted (2026-10-01), Collin's choices on the model's home and the demo. Applied and
+run on AWS the same day. Withdraws D-029 (the Serverless demo) and amends D-039 (scoring is a
+Processing job outside the pipeline).
 
 **Decision:**
 - **The shadow model lives in its own group**, `mlops-aiops-breach-risk-shadow`
@@ -44,19 +44,24 @@ tested locally; not yet applied or run on AWS. Amends D-029 (what the demo serve
   a 30-minute limit, the project tag, the budget check first. It runs `src.deploy.score`
   directly, not through `src.pipeline.step`, so it adds no CloudWatch metrics. The job also
   writes the demo's payload: the features and batch scores of the five highest-scored rows.
-- **The Serverless demo stays, smaller** (D-029 amended). It serves the shadow version on the
-  image's **default** handler, which reads a headerless numeric CSV. Each category travels as
-  its code in the model's own level order (`feature_schema.json`); unseen values go empty.
-  Locally, on 20,000 test rows, that gives the batch scores exactly (max difference 0.0); codes
-  in any other order are off by up to 0.99 (mean 0.19) with no error. It sends the batch job's
-  payload and checks each real-time score against the batch score. The point it makes: the six
-  history features need the whole request history, so a real-time caller would need a
-  feature store. **First attempt (2026-10-01) failed:** a custom handler (`SAGEMAKER_PROGRAM` +
-  `inference.py`) switches this image to its script-mode server, which writes
-  `/etc/sagemaker-nginx.conf`; Serverless containers can't ("PermissionError"), the endpoint sat
-  in Creating past the 10-minute wait, ended Failed, and was deleted by hand (`--cleanup-only`).
-  The demo now waits up to 15 minutes, waits out Creating before deleting, and serves a copy of
-  the model holding only `xgboost-model` so the default loader can't pick up the schema file.
+- **The Serverless demo was tried and dropped** (D-029 withdrawn, Collin 2026-10-01). It failed
+  twice on AWS, the same way: AWS's built-in XGBoost 3.2-0 image starts its model server by
+  writing `/etc/sagemaker-nginx.conf`, and a Serverless container can't write there
+  (`PermissionError: [Errno 13] Permission denied: '/etc/sagemaker-nginx.conf'`). That holds for
+  a custom handler (`SAGEMAKER_PROGRAM` + `inference.py`, first try: the endpoint sat in Creating
+  past the 10-minute wait, ended Failed, and was deleted by hand) and for the image's default
+  handler (second try: Failed at once, cleaned up by the script). Neither attempt served a
+  request, so neither billed. The remaining options were the older 1.7-1 image (which may not
+  load a 3.2 model, and likely shares the server code) or a custom serving image in ECR (new
+  infrastructure for a side demo); neither was worth it. The script and its tests were removed
+  (in git history at `04bcef6`) and the CI guard is back to no exceptions. What the attempt
+  established, and the article uses:
+  - the batch-versus-real-time case no longer rests on cost alone: the managed image doesn't
+    serve this way, and the six history features need the whole request history, so a
+    real-time caller would also need a feature store;
+  - for the default CSV handler, categories must travel as codes in the model's own level
+    order: locally, on 20,000 test rows, that reproduces the batch scores exactly; any other
+    order is off by up to 0.99 (mean 0.19) with no error.
 **Local run (2026-10-01, $0):** the challenger retrained locally reproduces `vhhhe5vtr34a`
 (PR-AUC 0.374, lift 2.43×). Scoring the 2026-09-23 snapshot took 22 s: 14,714 open requests
 inside their deadline, 1,477 flagged (10% of each sector), 2.4% in categories the model never
@@ -525,7 +530,8 @@ during them. All five controls cost $0.
 
 ## D-029 — One short-lived Serverless Inference demo in Stage 6 (amends D-007)
 
-**Status:** Accepted (2026-09-22). Stage 6 stands up a **SageMaker Serverless Inference**
+**Status:** Accepted (2026-09-22); **withdrawn 2026-10-01 (D-044)**: tried twice, and AWS's
+XGBoost 3.2-0 image can't serve on Serverless. Original decision: Stage 6 stands up a **SageMaker Serverless Inference**
 endpoint for the approved model, invokes it a handful of times, records cold-start and warm
 latency, and deletes it in the same run — `scripts/serverless_demo.py`, run by hand once.
 Batch Transform stays the deploy path; nothing in the pipeline serves in real time.
@@ -745,7 +751,8 @@ Articles publish to Medium (`collin-smith.medium.com`) — PNG exports embed the
 
 **Status:** Accepted (2026-09-09; updated by D-029). Batch transform is the honest fit for
 monthly-decision-cadence data, and an always-on endpoint bills 24/7 for no benefit here.
-Stage 6 backs this with a measured Serverless demo (D-029) rather than an assertion, and
+Stage 6 tried to back this with a measured Serverless demo (D-029); the managed image couldn't
+serve on Serverless (D-044), which is itself part of the case. And
 Stage 8 says it out loud, so it never reads as something that was avoided because it was
 hard.
 **Why:** a boundary you volunteer is a strength; one that surprises you is a weakness.
@@ -864,7 +871,8 @@ full-data baseline is 2.0×, D-037). Triage-grade, not high-accuracy. A weak fin
 
 ## D-007 — Deploy target: Batch Transform only, no always-on endpoint
 
-**Status:** Accepted; amended by D-029 (one short-lived Serverless demo in Stage 6).
+**Status:** Accepted; amended by D-029 (one short-lived Serverless demo in Stage 6), which was
+withdrawn in D-044.
 `ci.yml` fails the build if endpoint-creation code appears outside that demo; the pipeline's
 SageMaker IAM role has no `CreateEndpoint*` permission.
 **Why:** cost-honest for monthly-decision-cadence data; endpoints are the #1 surprise bill.

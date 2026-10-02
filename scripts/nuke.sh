@@ -51,7 +51,7 @@ if ! err=$(aws sts get-caller-identity --region "$REGION" --output text 2>&1 >/d
   exit 2
 fi
 
-say "SageMaker endpoints (there should be NONE; the Stage 6 serverless demo deletes its own)"
+say "SageMaker endpoints (there should be NONE: this series deploys batch only)"
 items=$(sm list-endpoints --query 'Endpoints[].EndpointName')
 for e in $items; do found "endpoint $e" sm delete-endpoint --endpoint-name "$e"; done
 [[ -z "${items// /}" ]] && clean

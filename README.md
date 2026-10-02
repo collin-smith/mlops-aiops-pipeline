@@ -17,9 +17,9 @@ diagram each, "failures you'll actually hit" framing. Written up outside this re
 - **Model:** per-request binary classification — will this request breach its category's
   proxy resolution-time threshold (per-`service_name` 75th percentile of `days_to_close`)?
 - **Deploy:** batch scoring as a SageMaker Processing job (the account has no Batch
-  Transform quota). No always-on endpoint; one short-lived Serverless Inference demo in Stage 6 (`scripts/serverless_demo.py`) measures real-time
-  latency and cost for comparison, then deletes itself. `ci.yml` fails the build if
-  endpoint-creation code appears anywhere else.
+  Transform quota). No real-time endpoint: a Serverless Inference demo was tried in Stage 6
+  and dropped, because AWS's built-in XGBoost image can't serve on Serverless (D-044).
+  `ci.yml` fails the build if endpoint-creation code appears anywhere.
 - **Cost:** ~$8 expected, **$25 hard cap on this project's cumulative spend** (tagged,
   before Free Tier credits), enforced by an AWS Budgets action that attaches a deny policy
   to the pipeline roles, plus an account-wide safety net that emails at $15 and $30 a month. All compute is job-based / ephemeral.
@@ -44,7 +44,7 @@ Adds a Model Registry behind a condition step: a model is registered only if it 
 A GitHub Actions workflow (OIDC, no static credentials) re-pulls the data and retrains a challenger with new history features: how each category and area has been doing lately, counting only outcomes already known at intake. It has to clear the fairness gate and beat the approved champion past a guardband. The challenger is clearly better (2.44× lift against 2.04×) and much fairer, but still short of the floor, so it runs in shadow mode rather than being approved.
 
 **6. Scoring Calgary's open 311 requests with a model I refused to approve — shadow mode on SageMaker** *(Shadow Scoring)* — _pending_
-The challenger the gate rejected still scores real open requests, in shadow: it's registered in a separate model group no role can approve, every score is labelled not-for-use, and nothing operational reads them. A batch Processing job scores only the open requests still inside their deadline (the rest are already late) and writes a queryable Athena table, plus a view that Stage 7 grades against what actually happened. A short-lived Serverless Inference demo measures real-time latency on the same rows, then is deleted.
+The challenger the gate rejected still scores real open requests, in shadow: it's registered in a separate model group no role can approve, every score is labelled not-for-use, and nothing operational reads them. A batch Processing job scores only the open requests still inside their deadline (the rest are already late) and writes a queryable Athena table, plus a view that Stage 7 grades against what actually happened. A real-time Serverless demo was tried and dropped: AWS's own XGBoost image can't serve on Serverless, and the model's history features would need a feature store anyway.
 
 **7. If a Calgary snowstorm breaks the model and nobody notices for a week, did governance even happen? — SageMaker Model Monitor + a pipeline-health anomaly detector (AIOps)** *(Watching the Watcher)* — _pending_
 Two AIOps layers: SageMaker Model Monitor catching data drift on the model's inputs (framed as "citizen-feedback drift detection" — distinguishing an expected seasonal shift from a genuine new pattern in what residents are reporting), and a separate anomaly detector watching the pipeline's own health metrics. This is the layer most MLOps monitoring setups skip entirely, and the piece that makes the AIOps claim real rather than aspirational.
@@ -94,7 +94,7 @@ src/ingest/   Socrata paged pull, snapshot/replay, local Parquet conversion, Glu
 src/features/ leakage-guarded label + feature builders
 src/pipeline/ SageMaker Pipeline DAG + step entrypoints        (Stage 3+)
 src/promote/  champion/challenger promotion logic              (Stage 5)
-src/deploy/   shadow scoring, the Serverless demo's handler     (Stage 6)
+src/deploy/   shadow scoring                                   (Stage 6)
 src/monitor/  Model Monitor + pipeline anomaly detection       (Stage 7)
 src/common/   config, CloudWatch metric emitters, Athena helper
 notebooks/    Stage 2 exploration + baseline
@@ -103,7 +103,7 @@ scripts/      nuke.sh teardown, explore_311.py exploratory queries,
               architecture_gen.py -> draw.io diagrams, table_gen.py -> table images,
               community_map.py -> community map (all three write to ../output/stages/,
               not into this repo), register_shadow.py + score_job.py -> Stage 6 shadow
-              scoring, serverless_demo.py -> Stage 6 real-time demo
+              scoring
 docs/         decisions, cost-log, model-card, data-and-privacy, exploratory-findings
 ```
 

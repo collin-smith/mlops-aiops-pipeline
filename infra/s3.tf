@@ -3,7 +3,7 @@
 #   processed/311/year=/month=/   partitioned Parquet, crawled into the Catalog
 #   model-artifacts/              SageMaker model.tar.gz outputs
 #   scored/asof=YYYY-MM-DD/       shadow scores, not for use (Stage 6, D-044; table shadow_scores)
-#   scored-reports/<job>/         each scoring run's summary + the Serverless demo's payload
+#   scored-reports/<job>/         each scoring run's summary
 
 resource "aws_s3_bucket" "datalake" {
   bucket = local.bucket_name

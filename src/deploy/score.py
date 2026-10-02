@@ -18,8 +18,8 @@ filing time, the way training saw them. The history features only count outcomes
 before that time, which is what makes scoring live data legitimate. The flag is the top
 10% within each sector (D-042's operating point).
 
-Writes ``scores/scores-<tag>.parquet`` (one row per scored request) and ``report/``
-(``summary.json``, and ``payload.json`` for the Serverless demo) under ``--out``.
+Writes ``scores/scores-<tag>.parquet`` (one row per scored request) and
+``report/summary.json`` under ``--out``.
 """
 
 from __future__ import annotations
@@ -40,9 +40,6 @@ from src.promote import fairness
 
 USAGE = "shadow-not-for-use"
 SUMMARY_FILE = "summary.json"
-PAYLOAD_FILE = "payload.json"
-# the Serverless demo sends these few scored rows and checks it gets the batch scores back
-PAYLOAD_ROWS = 5
 # The rolling counts look back 30 days before each request; the context frame starts a
 # little earlier than the oldest scored request so its counts see a full window.
 CONTEXT_DAYS = 31
@@ -127,9 +124,8 @@ def score(
     *,
     asof: pd.Timestamp | None = None,
     scored_at: datetime | None = None,
-) -> tuple[pd.DataFrame, dict, dict]:
-    """Shadow scores for the snapshot's open, undecided requests, a summary, and the
-    Serverless demo's payload (the features of the highest-scored few)."""
+) -> tuple[pd.DataFrame, dict]:
+    """Shadow scores for the snapshot's open, undecided requests, and a summary."""
     booster, schema, thresholds = load_artifact(model_dir)
     feature_set = schema.get("feature_set", "baseline")
     asof = asof if asof is not None else snapshot_time(raw)
@@ -153,14 +149,7 @@ def score(
         scored_at=stamp.isoformat(),
         requested_date=_requested(scored),
     )[OUTPUT_COLUMNS]
-    top = scored["pred"].nlargest(PAYLOAD_ROWS).index
-    payload = {
-        "rows": json.loads(X.loc[top].to_json(orient="records")),
-        "service_request_ids": scored.loc[top, "service_request_id"].tolist(),
-        "batch_scores": [round(float(p), 6) for p in scored.loc[top, "pred"]],
-    }
-    summary = summarize(out, asof, feature_set, model_ref)
-    return out.reset_index(drop=True), summary, payload
+    return out.reset_index(drop=True), summarize(out, asof, feature_set, model_ref)
 
 
 def summarize(out: pd.DataFrame, asof: pd.Timestamp, feature_set: str, model_ref: str) -> dict:
@@ -180,12 +169,9 @@ def summarize(out: pd.DataFrame, asof: pd.Timestamp, feature_set: str, model_ref
     }
 
 
-def write_outputs(
-    out: pd.DataFrame, summary: dict, payload: dict, out_dir: Path, model_tag: str
-) -> Path:
-    """``scores/scores-<tag>.parquet`` (what Athena reads), and ``report/`` with
-    ``summary.json`` (what the launcher prints) and ``payload.json`` (the demo's input).
-    Separate folders, so the table's location holds only Parquet."""
+def write_outputs(out: pd.DataFrame, summary: dict, out_dir: Path, model_tag: str) -> Path:
+    """``scores/scores-<tag>.parquet`` (what Athena reads) and ``report/summary.json`` (what
+    the launcher prints). Separate folders, so the table's location holds only Parquet."""
     scores_dir, report_dir = out_dir / "scores", out_dir / "report"
     scores_dir.mkdir(parents=True, exist_ok=True)
     report_dir.mkdir(parents=True, exist_ok=True)
@@ -193,7 +179,6 @@ def write_outputs(
     # millisecond timestamps: the Parquet unit every reader handles
     out.to_parquet(path, index=False, coerce_timestamps="ms", allow_truncated_timestamps=True)
     (report_dir / SUMMARY_FILE).write_text(json.dumps(summary, indent=2))
-    (report_dir / PAYLOAD_FILE).write_text(json.dumps(payload, indent=2))
     return path
 
 
@@ -211,8 +196,8 @@ def main(argv: list[str] | None = None) -> int:
 
     communities = fairness.load_communities(args.communities / COMMUNITIES_FILE)
     raw = load_requests(args.data)
-    out, summary, payload = score(args.model, raw, communities, args.model_ref)
-    write_outputs(out, summary, payload, args.out, args.model_tag)
+    out, summary = score(args.model, raw, communities, args.model_ref)
+    write_outputs(out, summary, args.out, args.model_tag)
     print(json.dumps(summary), flush=True)
     return 0
 

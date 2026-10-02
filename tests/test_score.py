@@ -1,26 +1,18 @@
 """Stage 6 shadow scoring (D-044): which rows get a score, the flag, the output's labels, and
-the Serverless demo's CSV agreeing with the batch job. No AWS calls.
+that scoring is repeatable. No AWS calls.
 
 The end-to-end tests need xgboost and scikit-learn (the `ml` extra) and skip without them.
 """
 
 from __future__ import annotations
 
-import importlib.util
 import json
-from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import pytest
 
 from src.deploy import score
 from src.features.build_labels import overdue_open
-
-_PATH = Path(__file__).resolve().parents[1] / "scripts" / "serverless_demo.py"
-_spec = importlib.util.spec_from_file_location("serverless_demo", _PATH)
-demo = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(demo)
 
 THRESHOLDS = pd.Series({"Pothole Repair": 5.0, "Tree Concern": 60.0, "__global__": 10.0})
 ASOF = pd.Timestamp("2026-09-24", tz="UTC")
@@ -134,7 +126,7 @@ def _score(run, **kw):
 
 
 def test_every_scored_row_is_labelled_not_for_use(scored_run):
-    out, summary, _ = _score(scored_run)
+    out, summary = _score(scored_run)
     assert list(out.columns) == score.OUTPUT_COLUMNS
     assert (out["usage"] == "shadow-not-for-use").all()
     assert (out["model_ref"] == "arn:test/1").all()
@@ -146,26 +138,9 @@ def test_every_scored_row_is_labelled_not_for_use(scored_run):
 
 
 def test_scoring_twice_gives_identical_output(scored_run):
-    a, _, _ = _score(scored_run)
-    b, _, _ = _score(scored_run)
+    a, _ = _score(scored_run)
+    b, _ = _score(scored_run)
     pd.testing.assert_frame_equal(a, b)
-
-
-def test_the_demo_csv_reproduces_the_batch_scores(scored_run):
-    """The Serverless demo sends each payload row as CSV codes to the image's default
-    handler, which builds a plain DMatrix and predicts without checking feature names. That
-    path must give the batch job's scores exactly."""
-    import xgboost as xgb
-
-    _, _, payload = _score(scored_run)
-    tar = (scored_run["model"] / "model.tar.gz").read_bytes()
-    schema, booster_bytes = demo.read_artifact(tar)
-    booster = xgb.Booster()
-    booster.load_model(bytearray(booster_bytes))
-    lines = [demo.csv_row(r, schema) for r in payload["rows"]]
-    arr = np.array([[float(v) if v else np.nan for v in ln.split(",")] for ln in lines])
-    live = booster.predict(xgb.DMatrix(arr), validate_features=False)
-    assert live.tolist() == pytest.approx(payload["batch_scores"], abs=1e-5)
 
 
 def test_main_writes_only_parquet_where_the_table_reads(scored_run, tmp_path):
@@ -177,6 +152,6 @@ def test_main_writes_only_parquet_where_the_table_reads(scored_run, tmp_path):
     ]  # fmt: skip
     assert score.main(args) == 0
     assert [p.name for p in (out / "scores").iterdir()] == ["scores-v1.parquet"]
-    assert sorted(p.name for p in (out / "report").iterdir()) == ["payload.json", "summary.json"]
+    assert sorted(p.name for p in (out / "report").iterdir()) == ["summary.json"]
     written = pd.read_parquet(out / "scores" / "scores-v1.parquet")
     assert str(written["deadline"].dtype).startswith("datetime64[ms")

@@ -15,8 +15,8 @@ resource "aws_iam_role" "sagemaker" {
 # Deliberately NOT AmazonSageMakerFullAccess. It can register a model but never approve one
 # (registry.tf denies it, D-041). Scoped to job-based compute only —
 # there is no CreateEndpoint / CreateEndpointConfig here, on purpose (D-007; ci.yml also
-# greps for it). The one Stage 6 Serverless demo runs under the operator's credentials
-# and uses this role only as the model's execution role (D-029).
+# greps for it). The Stage 6 Serverless demo (D-029) was removed: the built-in XGBoost image
+# can't serve on Serverless (D-044).
 resource "aws_iam_role_policy" "sagemaker" {
   name = "pipeline-jobs"
   role = aws_iam_role.sagemaker.id
