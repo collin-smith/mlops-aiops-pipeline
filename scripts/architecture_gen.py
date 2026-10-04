@@ -134,10 +134,10 @@ NODES: dict[str, tuple] = {
     "cwmetric":   ("CloudWatch metrics", "MLOpsAIOps/Pipeline", "mgmt", "mxgraph.aws4.cloudwatch", 1450, 120, 3),
     "batch":      ("SageMaker Processing", "shadow-score open requests", "ml", "mxgraph.aws4.sagemaker", 490, 380, 6),
     # D-045: the analyzer image as one-off Processing jobs; no monitoring schedule
-    "monitor":    ("Model Monitor analyzer", "one-off Processing · no schedule", "ml", "mxgraph.aws4.sagemaker", 970, 380, 7),
+    "monitor":    ("Model Monitor analyzer", "one-off Processing · no schedule", "ml", "mxgraph.aws4.sagemaker", 1450, 380, 7),
     "oidc":       ("IAM OIDC role", "github-actions · can't approve", "security", "mxgraph.aws4.identity_and_access_management_iam", 250, 470, 5),
     # D-045: the shadow scores against real outcomes, in Athena
-    "grade":      ("Shadow grading", "Athena · deadline-passed cohort", "analytics", "mxgraph.aws4.athena", 490, 470, 7),
+    "grade":      ("Shadow grading", "Athena · deadline-passed cohort", "analytics", "mxgraph.aws4.athena", 1210, 380, 7),
     "iam":        ("IAM roles", "sagemaker · glue", "security", "mxgraph.aws4.identity_and_access_management_iam", 250, 560, 1),
     "cwlog":      ("CloudWatch Logs", "StepFailure alarm", "mgmt", "mxgraph.aws4.cloudwatch", 490, 560, 1),
     "sns":        ("Amazon SNS", "alerts", "mgmt", "mxgraph.aws4.simple_notification_service", 730, 560, 1),
@@ -205,6 +205,33 @@ EDGE_ROUTES: dict[tuple, tuple] = {
         (p("oidc")[0] + 24, p("oidc")[1] - 25),
         (p("sm_pipe")[0] - 18, p("oidc")[1] - 25),
         (p("sm_pipe")[0] - 18, p("sm_pipe")[1] + 24),
+    ]),
+    # Stage 7 (D-045): the new boxes sit in the empty right-hand columns, and their edges ride
+    # the gaps between rows instead of crossing the services in between.
+    # processed/ -> analyzer: up out of processed/, along the gap under the top row, down the
+    # gap left of the shadow group's column, into the analyzer's left side
+    ("s3_proc", "monitor"): ("exitX=0.85;exitY=0;entryX=0;entryY=0.5;", lambda p: [
+        (p("s3_proc")[0] + 41, p("s3_proc")[1] - 24),
+        (p("monitor")[0] - 20, p("s3_proc")[1] - 24),
+        (p("monitor")[0] - 20, p("monitor")[1] + 24),
+    ]),
+    # inject_drift.py -> analyzer: under the bottom row, then up the empty right column
+    ("drift", "monitor"): ("exitX=0.5;exitY=1;entryX=0.5;entryY=1;", lambda p: [
+        (p("drift")[0] + 24, p("drift")[1] + 68),
+        (p("monitor")[0] + 24, p("drift")[1] + 68),
+    ]),
+    # scored/ -> grading: down into the gap under the scoring row (13 px below the OIDC route's
+    # lane, so the two don't merge), along it, up into grading
+    ("s3_score", "grade"): ("exitX=0.85;exitY=1;entryX=0.5;entryY=1;", lambda p: [
+        (p("s3_score")[0] + 41, p("s3_score")[1] + 78),
+        (p("grade")[0] + 24, p("s3_score")[1] + 78),
+    ]),
+    # pipeline_health -> SNS: into the gap left of the region's first column, down to the gap
+    # above the bottom row, along it, into the top of SNS
+    ("health", "sns"): ("exitX=1;exitY=0.85;entryX=0.5;entryY=0;", lambda p: [
+        (p("s3_score")[0] - 14, p("health")[1] + 41),
+        (p("s3_score")[0] - 14, p("sns")[1] - 21),
+        (p("sns")[0] + 24, p("sns")[1] - 21),
     ]),
 }
 # Routes that change once the Stage 3 steps share the training row: model-artifacts is
