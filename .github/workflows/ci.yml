@@ -37,6 +37,17 @@ jobs:
             exit 1
           fi
           echo "ok: no provisioned concurrency"
+      - name: Fail if a monitoring schedule appears anywhere
+        run: |
+          # Stage 7 runs Model Monitor's analyzer as one-off Processing jobs (D-045). A
+          # schedule would bill on its own clock (~$165/month hourly if forgotten).
+          if grep -rnE 'create_monitoring_schedule|MonitoringScheduleConfig' \
+            --include='*.py' --include='*.ipynb' \
+            src/ notebooks/ scripts/ 2>/dev/null; then
+            echo "::error::monitoring schedule code detected — Stage 7 checks run by hand (D-045)"
+            exit 1
+          fi
+          echo "ok: no monitoring schedules"
 
   lint-and-test:
     runs-on: ubuntu-latest

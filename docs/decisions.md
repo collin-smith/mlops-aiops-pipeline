@@ -5,6 +5,56 @@ ADR-lite. Newest first. Seeded from the planning docs
 
 ---
 
+## D-045 — Stage 7 monitoring runs by hand: shadow grading on the deadline-passed cohort, the analyzer as one-off jobs, a stated rule for pipeline health
+
+**Status:** Accepted (2026-10-03), Collin's choice of the recommended options. Built and tested
+locally; not yet run on AWS. Amends D-028 (the civic scorecard is a local CSV, rebuilt on the
+2026-10-01 findings) and replaces the 09-22 Stage 7 plan (a Model Monitor schedule and an
+anomaly Lambda on EventBridge).
+
+**Decision:**
+- **Nothing runs on a schedule.** No monitoring schedule, Lambda or EventBridge rule. Every
+  check is a hand-run script or a Processing job with a time limit, the project tag and the
+  budget check. ci.yml now refuses `create_monitoring_schedule` in `src/`, `scripts/` and
+  notebooks, as it refuses endpoint code.
+- **Shadow grading** (`src/deploy/grade.py`, `scripts/grade_shadow.py`): only the scored
+  requests whose deadline passed before the outcome snapshot are graded, each on its first
+  score. On-time outcomes arrive early and late ones only at the deadline, so grading every
+  decided row would undercount late requests. Inside the deadline-passed cohort every row is
+  decided. The report gives coverage and how the cohort's deadlines compare with all scored
+  rows, because the cohort leans to short-deadline types (the ★ bike racks and lane signs
+  won't be in it for months). Groups need 30 late requests to enter the recall ratio. It's a
+  report, not the gate: the model stays in shadow whatever it says. `shadow_outcomes` gains
+  `threshold_days` and `category_seen` (the table already had them).
+- **Data drift (Layer A):** Model Monitor's analyzer image runs as a plain Processing job
+  (`scripts/monitor_job.py`): one to suggest a baseline, then one per check, with
+  `publish_cloudwatch_metrics=Disabled` on every request (the analyzer publishes by default).
+  The baseline is the challenger's training rows (last two years of the training split,
+  featurised whole, then sampled to 200,000); a check compares **every request filed in the
+  30 days before a snapshot**, featurised as of filing time (`src/monitor/datasets.py`). Not
+  the scored set: it is open requests inside their deadline, skewed towards slow recent types,
+  and the analyzer would flag that skew, correctly and uselessly. `src/monitor/inject_drift.py`
+  writes a disclosed synthetic copy (potholes raised to 15% of the intake from about 1%, sized to cross the analyzer's default 0.1 categorical threshold; tripling them would move it by 0.02, so the default can't see one category tripling) under
+  `monitoring/injected/` as the known positive. Model quality is the shadow grade, not the
+  managed model-quality analysis, because the question is per-sector recall.
+- **Pipeline health (Layer B):** `scripts/pipeline_health.py` reads SageMaker's job history
+  (free), which covers every project job; the Stage 3 metrics cover three pipeline runs. A job
+  is flagged if it failed or if its seconds per million input rows exceed twice the median of
+  the other jobs of its kind. Too few points for an EWMA; that turns on at ten per kind.
+  Flags go to the existing SNS topic with `--alert`.
+- **Civic scorecard (Layer C):** `src/monitor/civic_scorecard.py`, local, five monthly series
+  from the companion findings, backfilled from 2021: the mix-fixed city late rate, sector
+  observed/expected, residential waste in EAST, Friday and Saturday filings against Monday to
+  Thursday, and the slowest 5%'s share of waiting days (trailing 12 months). Only requests
+  whose deadline has passed count (D-037's rule); months with more than 2% still pending are
+  provisional and never judged. Detection compares each month with the same month in earlier
+  years, runs an EWMA, and keeps runs of three flags. The northwest pothole gap was dropped:
+  it's out of date.
+**Why:** cost and the standing rule that nothing runs unattended; and honesty about sample
+size, both for the shadow cohort (arrival order) and for the pipeline (three runs).
+**Cost:** about $0.10–0.40 for the stage: a smoke run, a baseline and three checks on ml.t3.xlarge
+at about a cent each, the second snapshot's crawls, and Athena scans of a few MB.
+
 ## D-044 — Shadow scoring: a separate model group, open requests still inside their deadline, every row labelled not-for-use
 
 **Status:** Accepted (2026-10-01), Collin's choices on the model's home and the demo. Applied and

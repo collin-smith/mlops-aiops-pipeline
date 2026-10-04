@@ -1,4 +1,7 @@
-"""Model Monitor + pipeline-metric and civic-scorecard anomaly detection (AIOps).
+"""Stage 7 monitoring, all run by hand, nothing on a schedule (D-045).
 
-Built in Stage 7.
+* ``datasets`` / ``inject_drift``: the CSVs Model Monitor's analyzer compares (Layer A)
+* ``pipeline_health``: job history against a 2× rule (Layer B)
+* ``civic_scorecard``: the companion findings as monthly series (Layer C)
+* ``detect``: the detectors B and C share
 """

@@ -35,7 +35,7 @@ Frames the civic question up front before touching AWS. Pulls 5 years of Calgary
 Notebook exploration surfaces the seasonal patterns hiding in the data and builds a leakage-guarded, per-category breach label. Trains a first XGBoost model on a SageMaker Training Job and reports honest baseline metrics — modest but real predictive signal, not an inflated accuracy claim.
 
 **3. A model that only works when I run it by hand isn't a pipeline — turning Calgary's 311 triage model into a SageMaker Pipelines DAG** *(From Notebook to Pipeline)* — _pending_
-Turns the Stage 2 notebook into a real SageMaker Pipelines DAG (validate → train → evaluate), with parameterized, cacheable re-runs instead of hand-run scripts. Starts emitting operational metrics to CloudWatch that Stage 7's anomaly detector will later consume.
+Turns the Stage 2 notebook into a real SageMaker Pipelines DAG (validate → train → evaluate), with parameterized, cacheable re-runs instead of hand-run scripts. Starts emitting operational metrics to CloudWatch (Stage 7's health check reads SageMaker's job history, which covers more runs).
 
 **4. Whose Calgary 311 request waits? — a governance gate with the SageMaker Model Registry** *(Model Registry & Governance Gate)* — _pending_
 Adds a Model Registry behind a condition step: a model is registered only if it clears a PR-AUC floor **and** a fairness check across the City's planning sectors (it has to find slow requests as well in one part of the city as another). A separate IAM approver role makes the final call; the training role is denied it. The Stage 2 model fails the fairness check, and the gate stays where it is.
@@ -46,8 +46,8 @@ A GitHub Actions workflow (OIDC, no static credentials) re-pulls the data and re
 **6. Scoring Calgary's open 311 requests with a model I refused to approve — shadow mode on SageMaker** *(Shadow Scoring)* — _pending_
 The challenger the gate rejected still scores real open requests, in shadow: it's registered in a separate model group no role can approve, every score is labelled not-for-use, and nothing operational reads them. A batch Processing job scores only the open requests still inside their deadline (the rest are already late) and writes a queryable Athena table, plus a view that Stage 7 grades against what actually happened. A real-time Serverless demo was tried and dropped: AWS's own XGBoost image can't serve on Serverless, and the model's history features would need a feature store anyway.
 
-**7. If a Calgary snowstorm breaks the model and nobody notices for a week, did governance even happen? — SageMaker Model Monitor + a pipeline-health anomaly detector (AIOps)** *(Watching the Watcher)* — _pending_
-Two AIOps layers: SageMaker Model Monitor catching data drift on the model's inputs (framed as "citizen-feedback drift detection" — distinguishing an expected seasonal shift from a genuine new pattern in what residents are reporting), and a separate anomaly detector watching the pipeline's own health metrics. This is the layer most MLOps monitoring setups skip entirely, and the piece that makes the AIOps claim real rather than aspirational.
+**7. The model failed its fairness check, so I let it watch real 311 requests anyway. Here's how it did.** *(Watching the Watcher)* — _pending_
+Four checks, every one run by hand, with no schedules and no new CloudWatch metrics. The shadow scores are graded on what actually happened, using only the requests whose deadline has passed, so early on-time closures don't flatter the model. SageMaker Model Monitor's analyzer runs as one-off Processing jobs, comparing recent intake with the training data (framed as "citizen-feedback drift detection": an expected seasonal shift versus a genuine new pattern in what residents report), with a disclosed synthetic-drift copy as a known positive. A pipeline-health check reads SageMaker's job history against a stated 2× rule, because a few jobs per kind is too few for a fitted model. A civic scorecard turns the companion findings into monthly series that can be re-checked on each new snapshot.
 
 **8. What nearly six years of Calgary 311 data said — and what the whole SageMaker pipeline cost to run** *(The Findings & the Pitch)* — _pending_
 Synthesizes the civic insight (who waits longest and why), the final model numbers, total AWS spend against the cap, and an 8–10 item "failures you'll actually hit" retrospective. Closes with a narrative-only business pitch to a municipal 311 operations manager, explicitly disclaimed as no real business formed — genuinely useful directional intelligence, not a vetted policy recommendation.
@@ -60,7 +60,7 @@ Reference docs: [`docs/decisions.md`](docs/decisions.md) (locked decisions, ADR-
 
 ## Architecture
 
-![Full architecture: Socrata 311 data through S3, Glue, and Athena into a SageMaker Pipeline with a Model Registry governance gate, scheduled retraining, Batch Transform deployment, and two AIOps monitoring layers, all under an AWS Budgets hard cap](docs/architecture.svg)
+![Full architecture: Socrata 311 data through S3, Glue, and Athena into a SageMaker Pipeline with a Model Registry governance gate, manual retraining from GitHub Actions, shadow scoring as a Processing job, and hand-run monitoring (shadow grading, Model Monitor's analyzer, pipeline health, a civic scorecard), all under an AWS Budgets hard cap](docs/architecture.svg)
 
 *Auto-generated preview (plain category-coloured boxes, not the hand-tidied AWS-icon
 version — that one lives in `../output/stages/architecture.drawio`, see below).*
@@ -94,8 +94,8 @@ src/ingest/   Socrata paged pull, snapshot/replay, local Parquet conversion, Glu
 src/features/ leakage-guarded label + feature builders
 src/pipeline/ SageMaker Pipeline DAG + step entrypoints        (Stage 3+)
 src/promote/  champion/challenger promotion logic              (Stage 5)
-src/deploy/   shadow scoring                                   (Stage 6)
-src/monitor/  Model Monitor + pipeline anomaly detection       (Stage 7)
+src/deploy/   shadow scoring (Stage 6) and grading (Stage 7)
+src/monitor/  drift datasets, pipeline health, civic scorecard  (Stage 7)
 src/common/   config, CloudWatch metric emitters, Athena helper
 notebooks/    Stage 2 exploration + baseline
 tests/        unit tests (leakage guard, threshold math, promotion logic)

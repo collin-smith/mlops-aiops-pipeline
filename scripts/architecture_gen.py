@@ -68,13 +68,12 @@ _RESICON = {
     "batch":       "sagemaker",
     "monitor":     "sagemaker",
     "ecr":         "ecr",
-    "anomaly":     "lambda",
+    "grade":       "athena",
     "approver":    "identity_and_access_management",
     "oidc":        "identity_and_access_management",
     "iam":         "identity_and_access_management",
     "cwmetric":    "cloudwatch",
     "cwlog":       "cloudwatch",
-    "ebridge":     "eventbridge",
     "sns":         "sns",
     "budgets":     "budgets",
     "cost":        "cost_explorer",
@@ -99,6 +98,7 @@ _BOX_MARK = {
     "pull":    "&gt;_",
     "gha":     "CI",
     "drift":   "&gt;_",
+    "health":  "&gt;_",
 }
 
 # key -> (label, sub, cat, _unused_, x, y, stage-introduced)
@@ -108,6 +108,9 @@ NODES: dict[str, tuple] = {
     "pull":       ("socrata_pull.py", "local · pull→Parquet", "external", "mxgraph.aws4.command_line_interface", 20, 202, 1),
     "gha":        ("GitHub Actions", "manual retrain · OIDC", "external", "mxgraph.aws4.git", 20, 470, 5),
     "drift":      ("inject_drift.py", "local · synthetic drift", "external", "mxgraph.aws4.command_line_interface", 20, 560, 7),
+    # D-045: pipeline health and the civic scorecard run by hand, on the laptop; no Lambda,
+    # no EventBridge schedule
+    "health":     ("pipeline_health · scorecard", "local · by hand · 2× rule / EWMA", "external", "mxgraph.aws4.command_line_interface", 20, 380, 7),
     "s3_raw":     ("S3  raw/", "asof=YYYY-MM-DD", "storage", "mxgraph.aws4.s3", 250, 120, 1),
     "s3_proc":    ("S3  processed/", "partitioned Parquet", "storage", "mxgraph.aws4.s3", 250, 200, 1),
     "s3_model":   ("S3  model-artifacts/", "model.tar.gz", "storage", "mxgraph.aws4.s3", 250, 290, 2),
@@ -130,10 +133,11 @@ NODES: dict[str, tuple] = {
     "shadow":     ("Shadow model group", "rejected · never approved", "ml", "mxgraph.aws4.sagemaker", 1450, 200, 6),
     "cwmetric":   ("CloudWatch metrics", "MLOpsAIOps/Pipeline", "mgmt", "mxgraph.aws4.cloudwatch", 1450, 120, 3),
     "batch":      ("SageMaker Processing", "shadow-score open requests", "ml", "mxgraph.aws4.sagemaker", 490, 380, 6),
-    "monitor":    ("SageMaker Model Monitor", "baseline + schedule", "ml", "mxgraph.aws4.sagemaker", 970, 380, 7),
-    "anomaly":    ("Anomaly detection", "EWMA · pipeline + civic", "compute", "mxgraph.aws4.lambda", 1210, 380, 7),
+    # D-045: the analyzer image as one-off Processing jobs; no monitoring schedule
+    "monitor":    ("Model Monitor analyzer", "one-off Processing · no schedule", "ml", "mxgraph.aws4.sagemaker", 970, 380, 7),
     "oidc":       ("IAM OIDC role", "github-actions · can't approve", "security", "mxgraph.aws4.identity_and_access_management_iam", 250, 470, 5),
-    "ebridge":    ("Amazon EventBridge", "schedules", "mgmt", "mxgraph.aws4.eventbridge", 490, 470, 7),
+    # D-045: the shadow scores against real outcomes, in Athena
+    "grade":      ("Shadow grading", "Athena · deadline-passed cohort", "analytics", "mxgraph.aws4.athena", 490, 470, 7),
     "iam":        ("IAM roles", "sagemaker · glue", "security", "mxgraph.aws4.identity_and_access_management_iam", 250, 560, 1),
     "cwlog":      ("CloudWatch Logs", "StepFailure alarm", "mgmt", "mxgraph.aws4.cloudwatch", 490, 560, 1),
     "sns":        ("Amazon SNS", "alerts", "mgmt", "mxgraph.aws4.simple_notification_service", 730, 560, 1),
@@ -167,12 +171,10 @@ EDGES: list[tuple] = [
     ("shadow", "batch", "shadow model", 6, False),
     ("batch", "s3_score", "", 6, False),
     ("s3_score", "athena", "", 6, False),
-    ("s3_proc", "monitor", "baseline", 7, False),
-    ("batch", "monitor", "", 7, False),
-    ("drift", "monitor", "synthetic drift", 7, False),
-    ("monitor", "sns", "violation", 7, False),
-    ("cwmetric", "anomaly", "", 7, False),
-    ("anomaly", "sns", "anomaly alarm", 7, False),
+    ("s3_proc", "monitor", "intake vs baseline", 7, False),
+    ("drift", "monitor", "synthetic copy", 7, False),
+    ("s3_score", "grade", "shadow_outcomes", 7, False),
+    ("health", "sns", "flags", 7, False),
 ]
 
 # draw.io only: edges whose automatic route would cross an icon or a label.
@@ -328,6 +330,26 @@ ARTICLE_VIEWS = {
                 "approve. It scores only open requests still inside their deadline; nothing operational reads "
                 "the scores. Stage 7 grades them against real outcomes. A Serverless real-time demo was tried "
                 "and dropped: AWS's XGBoost image can't serve on Serverless.",
+    },
+    7: {
+        "nodes": {
+            "drift": (20, 260), "health": (20, 410),
+            "s3_score": (400, 110), "grade": (740, 110),
+            "monitor": (400, 260), "s3_proc": (740, 260),
+            "sns": (400, 410),
+        },
+        "outside": ("drift", "health"),
+        "edges": [
+            ("s3_score", "grade", "shadow_outcomes", _BOTTOM, None),
+            ("drift", "monitor", "synthetic copy", _BOTTOM, None),
+            # right to left along the icons' lower edge, as Stage 6's shadow -> batch
+            ("s3_proc", "monitor", "intake vs baseline", "exitX=0;exitY=1;entryX=1;entryY=1;", None),
+            ("health", "sns", "flags", _BOTTOM, None),
+        ],
+        "note": "Every check runs by hand: no schedule, no Lambda, no new CloudWatch metrics. Grading uses only "
+                "scored requests whose deadline has passed, so on-time closures don't arrive first and "
+                "flatter the model. The analyzer runs as a one-off Processing job; the injected copy is "
+                "disclosed synthetic drift.",
     },
 }
 
