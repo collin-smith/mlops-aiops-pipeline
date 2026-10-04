@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 
 import boto3
+import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -53,7 +54,12 @@ def main(argv: list[str] | None = None) -> int:
     snapshots = {**pipeline_health.SNAPSHOT_ROWS, **dict(args.snapshot)}
     assessed = pipeline_health.assess(jobs, snapshots)
     cols = ["created", "kind", "status", "billed_seconds", "usd", "sec_per_mrows", "reason"]
-    print(assessed[cols].to_string(index=False, float_format=lambda v: f"{v:.1f}"))
+    fmt = {
+        "billed_seconds": lambda v: f"{v:.0f}",
+        "usd": lambda v: f"{v:.4f}",
+        "sec_per_mrows": lambda v: "" if pd.isna(v) else f"{v:.1f}",
+    }
+    print(assessed[cols].to_string(index=False, formatters=fmt))
     print(f"{len(assessed)} jobs, ≈ ${assessed['usd'].sum():.3f} estimated in all")
     if args.csv:
         assessed.to_csv(args.csv, index=False)

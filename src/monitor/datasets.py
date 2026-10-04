@@ -43,6 +43,21 @@ from src.pipeline.train import (
 )
 
 COLUMNS = FEATURE_SETS["challenger"]
+# The analyzer only tracks a distribution for low-cardinality strings: on the 2026-10-01
+# baseline it kept one for agency_responsible (47 values) and source (4), and none for
+# service_name (571) or comm_name (320), so the request mix itself went unwatched. This
+# column (not a model feature) gives it a mix it can see: the department prefix of the
+# service name, the 30 largest from that baseline (98.6% of requests), the rest "Other".
+# Fixed here so the baseline and every later check map the same way.
+DEPARTMENTS = (
+    "Roads", "WRS", "Bylaw", "Parks", "WATS", "AT", "Corporate", "CT", "DBBS Inspection",
+    "Finance", "CFD", "RSP", "DBBS", "AS", "311 Contact Us", "Recreation", "GFL", "CT AC",
+    "ACPL", "Opinions on Business Units", "Community Safety", "Business Safety",
+    "DBBS Concern", "PSD", "Law", "Active Living Program Application", "HR",
+    "After Hours Transit", "VFH", "Customer Service & Communications",
+)  # fmt: skip
+OTHER = "Other"
+CSV_COLUMNS = [*COLUMNS, "department"]
 INTAKE_DAYS = 30
 BASELINE_SAMPLE = 200_000  # the analyzer runs Spark on one ml.t3; see the smoke test
 SEED = 42
@@ -57,6 +72,20 @@ def model_thresholds(model_dir: Path) -> pd.Series:
 
 def _requested(df: pd.DataFrame) -> pd.Series:
     return pd.to_datetime(df["requested_date"], errors="coerce", utc=True, format="ISO8601")
+
+
+def department(service_name: pd.Series) -> pd.Series:
+    """The service name's prefix before " - ", one of ``DEPARTMENTS`` or "Other"."""
+    prefix = service_name.astype("string").str.split(" - ").str[0].str.strip()
+    return prefix.where(prefix.isin(DEPARTMENTS), OTHER).fillna(OTHER)
+
+
+def _csv_ready(X: pd.DataFrame) -> pd.DataFrame:
+    """Strings for the analyzer (a missing level stays empty), plus the department."""
+    for c in CATEGORICAL:
+        X[c] = X[c].astype("string")
+    X["department"] = department(X["service_name"])
+    return X[CSV_COLUMNS].reset_index(drop=True)
 
 
 def intake_rows(raw: pd.DataFrame, asof: pd.Timestamp, days: int = INTAKE_DAYS) -> pd.DataFrame:
@@ -74,9 +103,7 @@ def feature_table(rows, raw, thresholds, sectors) -> pd.DataFrame:
     context = context_frame(raw, rows)
     X = featurize(context, raw, thresholds, sectors, "challenger").loc[rows.index, COLUMNS]
     assert_no_leakage(X)
-    for c in CATEGORICAL:  # the analyzer reads strings; a missing level stays empty
-        X[c] = X[c].astype("string")
-    return X.reset_index(drop=True)
+    return _csv_ready(X)
 
 
 def baseline_table(raw, thresholds, sectors, sample: int = BASELINE_SAMPLE) -> pd.DataFrame:
@@ -89,9 +116,7 @@ def baseline_table(raw, thresholds, sectors, sample: int = BASELINE_SAMPLE) -> p
     if sample and len(X) > sample:
         X = X.sample(n=sample, random_state=SEED).sort_index()
     assert_no_leakage(X)
-    for c in CATEGORICAL:
-        X[c] = X[c].astype("string")
-    return X.reset_index(drop=True)
+    return _csv_ready(X)
 
 
 def main(argv: list[str] | None = None) -> int:

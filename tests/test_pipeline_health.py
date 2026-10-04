@@ -65,3 +65,13 @@ def test_a_bigger_snapshot_is_not_a_slow_job():
     out = ph.assess(jobs, {"2026-09-01": 1_000_000, "2026-09-30": 2_000_000})
     assert not out["flag"].any()
     assert ph.alert_text(out) is None
+
+
+def test_kinds_that_skip_the_snapshot_are_judged_on_seconds():
+    jobs = pd.DataFrame(
+        [_job(str(i), "monitor-check", 280) for i in range(3)]
+        + [_job("slow", "monitor-check", 700)]
+    )
+    out = ph.assess(jobs).set_index("name")
+    assert out["sec_per_mrows"].isna().all()  # it read a CSV, not the snapshot
+    assert out["flag"].to_dict() == {"0": False, "1": False, "2": False, "slow": True}

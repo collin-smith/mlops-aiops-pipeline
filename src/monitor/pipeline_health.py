@@ -7,7 +7,8 @@ billed seconds, an estimated cost, and **seconds per million input rows**, which
 slow job is told apart from a bigger snapshot.
 
 The rule is stated, not fitted: a job is flagged if it failed, or if its seconds per
-million rows are more than twice the median of the other jobs of its kind
+million rows (billed seconds, for kinds that don't read the snapshot) are more than twice
+the median of the other jobs of its kind
 (``detect.ratio_flags``). There are a handful of jobs per kind, and an EWMA on three points
 would be theatre. ``detect.ewma_flags`` takes over once a kind has ten.
 """
@@ -25,6 +26,9 @@ from src.monitor import detect
 # is matched to the newest snapshot taken on or before its start. Add new ones with
 # ``scripts/pipeline_health.py --snapshot <asof>=<rows>``.
 SNAPSHOT_ROWS = {"2026-09-23": 2_911_486, "2026-10-01": 2_921_625}
+# Only these kinds read the whole snapshot, so only they are judged per million rows. The
+# others (smoke tests, the analyzer reading a sampled CSV) are judged on billed seconds.
+SNAPSHOT_KINDS = ("train", "score", "pipeline-")
 _STAMP = re.compile(r"-\d{8}-\d{6}$")
 
 
@@ -86,12 +90,15 @@ def assess(jobs: pd.DataFrame, snapshots: dict[str, int] | None = None) -> pd.Da
         estimate_cost_usd(t, s) if pd.notna(s) else float("nan")
         for t, s in zip(out["instance_type"], out["billed_seconds"], strict=True)
     ]
-    out["rows"] = rows_at(out["created"], snapshots or SNAPSHOT_ROWS)
+    reads_snapshot = out["kind"].str.startswith(SNAPSHOT_KINDS)
+    out["rows"] = rows_at(out["created"], snapshots or SNAPSHOT_ROWS).where(reads_snapshot)
     out["sec_per_mrows"] = out["billed_seconds"] / (out["rows"] / 1e6)
+    # what each job is judged on: per million rows if it reads the snapshot, else seconds
+    measure = out["sec_per_mrows"].where(reads_snapshot, out["billed_seconds"])
     done = out["status"] == "Completed"
     slow = pd.Series(False, index=out.index)
-    judged = out.loc[done & out["sec_per_mrows"].notna()]
-    slow.loc[judged.index] = detect.ratio_flags(judged["sec_per_mrows"], judged["kind"])
+    judged = out.loc[done & measure.notna()]
+    slow.loc[judged.index] = detect.ratio_flags(measure[judged.index], judged["kind"])
     failed = out["status"] == "Failed"
     out["flag"] = slow | failed
     out["reason"] = ""

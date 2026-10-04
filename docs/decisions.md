@@ -37,6 +37,16 @@ anomaly Lambda on EventBridge).
   writes a disclosed synthetic copy (potholes raised to 15% of the intake from about 1%, sized to cross the analyzer's default 0.1 categorical threshold; tripling them would move it by 0.02, so the default can't see one category tripling) under
   `monitoring/injected/` as the known positive. Model quality is the shadow grade, not the
   managed model-quality analysis, because the question is per-sector recall.
+  **First run (2026-10-03, four jobs, ≈ $0.067, no metrics published):** the analyzer keeps a
+  category distribution only for low-cardinality strings (`agency_responsible`, 47 values;
+  `source`, 4), and none for `service_name` (571) or `comm_name` (320). So the request mix went
+  unwatched, and the injected copy fired only one level up (`agency_responsible`, 0.127). The
+  datasets now carry a `department` column (the service name's prefix, the 30 largest from
+  that baseline, 98.6% of requests, the rest "Other"; not a model feature). Locally it reads
+  0.035 for the real intake and 0.137 for the injected copy. The first run's results stay in
+  S3 under their own labels. On the real intake the largest drift was in the history features
+  (`sector_late_90d` 0.61, `comm_late_90d` 0.31): they carry the falling late rate. Completeness
+  failures on those features come from recent requests' undecided lookback windows.
 - **Pipeline health (Layer B):** `scripts/pipeline_health.py` reads SageMaker's job history
   (free), which covers every project job; the Stage 3 metrics cover three pipeline runs. A job
   is flagged if it failed or if its seconds per million input rows exceed twice the median of

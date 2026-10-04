@@ -28,7 +28,7 @@ def test_baseline_counts_match_featurising_the_whole_split(requests_frame):
     full = featurize(recent(train, 2), requests_frame, thresholds, sectors, "challenger")
     table = datasets.baseline_table(requests_frame, thresholds, sectors, sample=40)
     assert len(table) == 40
-    assert list(table.columns) == datasets.COLUMNS
+    assert list(table.columns) == datasets.CSV_COLUMNS
     sampled = full.sample(n=40, random_state=datasets.SEED).sort_index()
     assert table["cat_open_30d"].tolist() == sampled["cat_open_30d"].tolist()
 
@@ -49,3 +49,11 @@ def test_injection_sets_the_share_and_keeps_the_size():
 def test_injection_refuses_a_pattern_with_no_rows():
     with pytest.raises(SystemExit, match="no rows"):
         inject_drift.inject(_intake(), pattern="Volcano")
+
+
+def test_department_is_the_prefix_or_other():
+    names = pd.Series(
+        ["Roads - Pothole Maintenance", "WRS - Cart Management", "Zoo - Penguins", None, "Law"]
+    )
+    assert datasets.department(names).tolist() == ["Roads", "WRS", "Other", "Other", "Law"]
+    assert len(datasets.DEPARTMENTS) == 30
