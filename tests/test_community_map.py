@@ -47,3 +47,8 @@ def test_load_metrics_csv_skips_blank_rows(tmp_path):
     p = tmp_path / "m.csv"
     p.write_text("comm_code,value,n\nAAA,0.25,300\n,0.5,10\nBBB,,40\n")
     assert cmap.load_metrics_csv(p) == {"AAA": (0.25, 300)}
+
+
+def test_ratio_bands_are_centred_on_one():
+    assert [cmap.ratio_class(v) for v in (0.70, 0.90, 1.00, 1.05, 1.10, 1.30)] == [0, 1, 2, 2, 3, 4]
+    assert len(cmap.RATIO_HEX) == len(cmap.RATIO_LABELS) == len(cmap.RATIO_BREAKS) + 1
