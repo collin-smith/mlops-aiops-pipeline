@@ -226,6 +226,14 @@ EDGE_ROUTES: dict[tuple, tuple] = {
         (p("s3_score")[0] + 41, p("s3_score")[1] + 78),
         (p("grade")[0] + 24, p("s3_score")[1] + 78),
     ]),
+    # scored/ -> Athena: down out of scored/, along the gap above the OIDC lane, up the gap
+    # left of the scoring job's column, along the gap under Glue, into the bottom of Athena
+    ("s3_score", "athena"): ("exitX=0.3;exitY=1;entryX=0.25;entryY=1;", lambda p: [
+        (p("s3_score")[0] + 14, p("s3_score")[1] + 62),
+        (p("batch")[0] - 20, p("s3_score")[1] + 62),
+        (p("batch")[0] - 20, p("athena")[1] + 58),
+        (p("athena")[0] + 12, p("athena")[1] + 58),
+    ]),
     # pipeline_health -> SNS: into the gap left of the region's first column, down to the gap
     # above the bottom row, along it, into the top of SNS
     ("health", "sns"): ("exitX=1;exitY=0.85;entryX=0.5;entryY=0;", lambda p: [
@@ -233,6 +241,18 @@ EDGE_ROUTES: dict[tuple, tuple] = {
         (p("s3_score")[0] - 14, p("sns")[1] - 21),
         (p("sns")[0] + 24, p("sns")[1] - 21),
     ]),
+}
+# Edge labels moved off their default spot (the middle of the edge), as (dx, dy) in px.
+LABEL_OFFSETS: dict[tuple, tuple] = {
+    # above the intake-vs-baseline lane, right of raw/ -> processed/, not on the corner
+    ("s3_raw", "s3_proc"): (64, -21),
+    # in the gap between the services row and the ECR lane
+    ("s3gw", "s3_svc"): (0, -48),
+}
+# Main pages (Full + per stage) only: the external column's labels must end before the AWS
+# Cloud frame. The article views have room for the full text.
+MAIN_LABELS: dict[str, tuple] = {
+    "health": ("pipeline_health", "+ scorecard · by hand"),
 }
 # Routes that change once the Stage 3 steps share the training row: model-artifacts is
 # reached under the validate step, and ECR (now below train) feeds it from underneath.
@@ -411,30 +431,34 @@ NOTE_MAIN = (
 )
 
 # --- Network view ---
+# Each interface endpoint sits in its own column, under its service; the job's ENI sits below
+# the endpoints, so its edges run along one lane and up, and nothing crosses a label.
 NET_NODES: dict[str, tuple] = {
-    "s3_svc":      ("Amazon S3", "", "storage", "mxgraph.aws4.s3", 120, 120),
-    "ecr_svc":     ("Amazon ECR", "", "compute", "mxgraph.aws4.elastic_container_registry", 360, 120),
-    "sm_svc":      ("SageMaker API / Runtime", "", "ml", "mxgraph.aws4.sagemaker", 600, 120),
-    "logs_svc":    ("CloudWatch Logs", "", "mgmt", "mxgraph.aws4.cloudwatch", 900, 120),
-    "sts_svc":     ("AWS STS", "", "security", "mxgraph.aws4.identity_and_access_management_iam", 1140, 120),
-    "s3gw":        ("S3 Gateway Endpoint", "route-table · free", "network", "mxgraph.aws4.endpoints", 130, 360),
-    "eni_a":       ("SageMaker job ENI", "train / process / transform", "ml", "mxgraph.aws4.sagemaker", 200, 560),
-    "vpce_smapi":  ("VPCE sagemaker.api", "interface", "network", "mxgraph.aws4.endpoints", 200, 700),
-    "vpce_smrt":   ("VPCE sagemaker.runtime", "interface", "network", "mxgraph.aws4.endpoints", 470, 700),
-    "vpce_ecrdkr": ("VPCE ecr.dkr", "interface", "network", "mxgraph.aws4.endpoints", 200, 840),
-    "eni_b":       ("SageMaker job ENI", "train / process / transform", "ml", "mxgraph.aws4.sagemaker", 980, 560),
-    "vpce_ecrapi": ("VPCE ecr.api", "interface", "network", "mxgraph.aws4.endpoints", 980, 700),
-    "vpce_sts":    ("VPCE sts", "interface", "network", "mxgraph.aws4.endpoints", 1250, 700),
-    "vpce_logs":   ("VPCE logs", "interface", "network", "mxgraph.aws4.endpoints", 980, 840),
+    "sm_svc":      ("SageMaker API / Runtime", "", "ml", "mxgraph.aws4.sagemaker", 590, 120),
+    "ecr_svc":     ("Amazon ECR", "", "compute", "mxgraph.aws4.elastic_container_registry", 820, 120),
+    "s3_svc":      ("Amazon S3", "", "storage", "mxgraph.aws4.s3", 1006, 120),
+    "sts_svc":     ("AWS STS", "", "security", "mxgraph.aws4.identity_and_access_management_iam", 1530, 120),
+    "logs_svc":    ("CloudWatch Logs", "", "mgmt", "mxgraph.aws4.cloudwatch", 1760, 120),
+    # VPC-level, in the gap between the two AZs
+    "s3gw":        ("S3 Gateway Endpoint", "route-table · free", "network", "mxgraph.aws4.endpoints", 1006, 360),
+    "vpce_smapi":  ("VPCE sagemaker.api", "interface", "network", "mxgraph.aws4.endpoints", 360, 600),
+    "vpce_smrt":   ("VPCE sagemaker.runtime", "interface", "network", "mxgraph.aws4.endpoints", 590, 600),
+    "vpce_ecrdkr": ("VPCE ecr.dkr", "interface", "network", "mxgraph.aws4.endpoints", 820, 600),
+    "eni_a":       ("SageMaker job ENI", "train / process / transform", "ml", "mxgraph.aws4.sagemaker", 170, 780),
+    "vpce_ecrapi": ("VPCE ecr.api", "interface", "network", "mxgraph.aws4.endpoints", 1300, 600),
+    "vpce_sts":    ("VPCE sts", "interface", "network", "mxgraph.aws4.endpoints", 1530, 600),
+    "vpce_logs":   ("VPCE logs", "interface", "network", "mxgraph.aws4.endpoints", 1760, 600),
+    "eni_b":       ("SageMaker job ENI", "train / process / transform", "ml", "mxgraph.aws4.sagemaker", 1110, 780),
 }
 NET_GROUPS = [
-    ("cloud", 30, 52, 1660, 1018, "AWS Cloud", "#232F3E", 0),
-    ("region", 56, 80, 1608, 976, "Region  ca-central-1", "#00A4A6", 1),
-    ("vpc", 90, 300, 1540, 740, "VPC  10.0.0.0/16   ·   no Internet Gateway · no NAT Gateway", "#8C4FFF", 0),
-    ("az_a", 120, 470, 720, 540, "Availability Zone  ca-central-1a", "#00A4A6", 1),
-    ("az_b", 900, 470, 720, 540, "Availability Zone  ca-central-1b", "#00A4A6", 1),
-    ("sn_a", 150, 520, 660, 470, "Private subnet  10.0.0.0/24", "#248814", 1),
-    ("sn_b", 930, 520, 660, 470, "Private subnet  10.0.1.0/24", "#248814", 1),
+    ("cloud", 30, 52, 2000, 938, "AWS Cloud", "#232F3E", 0),
+    ("region", 56, 80, 1948, 880, "Region  ca-central-1", "#00A4A6", 1),
+    # kept short: the endpoint lines cross the VPC's top edge from x = 384
+    ("vpc", 90, 300, 1880, 630, "VPC  10.0.0.0/16  ·  no IGW · no NAT", "#8C4FFF", 0),
+    ("az_a", 120, 470, 880, 430, "Availability Zone  ca-central-1a", "#00A4A6", 1),
+    ("az_b", 1060, 470, 880, 430, "Availability Zone  ca-central-1b", "#00A4A6", 1),
+    ("sn_a", 150, 520, 820, 350, "Private subnet  10.0.0.0/24", "#248814", 1),
+    ("sn_b", 1090, 520, 820, 350, "Private subnet  10.0.1.0/24", "#248814", 1),
 ]
 NET_EDGES = [
     ("eni_a", "vpce_smapi", "", False),
@@ -443,18 +467,59 @@ NET_EDGES = [
     ("eni_b", "vpce_ecrapi", "", False),
     ("eni_b", "vpce_sts", "", False),
     ("eni_b", "vpce_logs", "", False),
-    ("vpce_smapi", "sm_svc", "443", False),
-    ("vpce_smrt", "sm_svc", "443", False),
-    ("vpce_ecrdkr", "ecr_svc", "443", False),
-    ("vpce_ecrapi", "ecr_svc", "443", False),
-    ("vpce_sts", "sts_svc", "443", False),
-    ("vpce_logs", "logs_svc", "443", False),
+    ("vpce_smapi", "sm_svc", "", False),
+    ("vpce_smrt", "sm_svc", "", False),
+    ("vpce_ecrdkr", "ecr_svc", "", False),
+    ("vpce_ecrapi", "ecr_svc", "", False),
+    ("vpce_sts", "sts_svc", "", False),
+    ("vpce_logs", "logs_svc", "", False),
     ("s3gw", "s3_svc", "prefix list", False),
     ("eni_a", "s3gw", "S3 via gateway", True),
-    ("eni_b", "s3gw", "S3 via gateway", True),
+    ("eni_b", "s3gw", "", True),
 ]
+_ENI_LANE = 720  # between the endpoints' row and the ENIs'
+
+
+def _net_routes():
+    up = "exitX=0.5;exitY=0;entryX=0.5;entryY=1;"
+    # up out of the ENI to the lane, along it, up into the endpoint's bottom
+    eni = {
+        (e, v): (up, lambda p, e=e, v=v: [(p(e)[0] + 24, _ENI_LANE), (p(v)[0] + 24, _ENI_LANE)])
+        for e, vs in (
+            ("eni_a", ("vpce_smapi", "vpce_smrt", "vpce_ecrdkr")),
+            ("eni_b", ("vpce_ecrapi", "vpce_sts", "vpce_logs")),
+        )
+        for v in vs
+    }
+    return {
+        **eni,
+        # straight up into the service above
+        ("vpce_smrt", "sm_svc"): (up, None),
+        ("vpce_ecrdkr", "ecr_svc"): (up, None),
+        ("vpce_sts", "sts_svc"): (up, None),
+        ("vpce_logs", "logs_svc"): (up, None),
+        ("s3gw", "s3_svc"): (up, None),
+        # the second endpoint of a service: up its own column, along the gap above the VPC
+        ("vpce_smapi", "sm_svc"): ("exitX=0.5;exitY=0;entryX=0.25;entryY=1;", lambda p: [
+            (p("vpce_smapi")[0] + 24, 230), (p("sm_svc")[0] + 12, 230),
+        ]),
+        ("vpce_ecrapi", "ecr_svc"): ("exitX=0.5;exitY=0;entryX=0.75;entryY=1;", lambda p: [
+            (p("vpce_ecrapi")[0] + 24, 270), (p("ecr_svc")[0] + 36, 270),
+        ]),
+        # S3 traffic: out under each ENI's label, along to the gap between the AZs, up
+        ("eni_a", "s3gw"): ("exitX=1;exitY=0.85;entryX=0.5;entryY=1;", lambda p: [
+            (p("s3gw")[0] + 24, p("eni_a")[1] + 41),
+        ]),
+        ("eni_b", "s3gw"): ("exitX=0;exitY=0.85;entryX=0.5;entryY=1;", lambda p: [
+            (p("s3gw")[0] + 24, p("eni_b")[1] + 41),
+        ]),
+    }
+
+
+NET_ROUTES = _net_routes()
 NOTE_NET = (
-    "Fully private: no IGW, no NAT. AWS API traffic stays on the AWS network via VPC endpoints. "
+    "Fully private: no IGW, no NAT. AWS API traffic stays on the AWS network via VPC endpoints, "
+    "over HTTPS (443) from the jobs' security group. "
     "~6 interface endpoints x ~$7.30/mo ~= $44/mo -- why the default build omits this (D-020). "
     "SageMaker jobs launched with VpcConfig = {subnets, security groups}."
 )
@@ -865,6 +930,9 @@ def _drawio_page(
             },
         )
         geo = ET.SubElement(ec, "mxGeometry", {"relative": "1", "as": "geometry"})
+        if (a, b) in LABEL_OFFSETS:
+            dx, dy = LABEL_OFFSETS[(a, b)]
+            ET.SubElement(geo, "mxPoint", {"x": str(dx), "y": str(dy), "as": "offset"})
         if pts:
             arr = ET.SubElement(geo, "Array", {"as": "points"})
             for px, py in pts(pos):
@@ -1007,7 +1075,7 @@ def _mxfile(pages):
                 "dy": "900",
                 "grid": "0",
                 "page": "1",
-                "pageWidth": "1760",
+                "pageWidth": "2080" if kind == "net" else "1760",
                 "pageHeight": "1180",
                 "math": "0",
             },
@@ -1020,11 +1088,14 @@ def _mxfile(pages):
                 NET_EDGES,
                 "Network — VPC-hardened variant  (NOT the default build)",
                 NOTE_NET,
+                routed=True,
+                routes=NET_ROUTES,
             )
         else:
             s = stage
             keep = None if kind == "full" else {k for k, v in NODES.items() if v[6] <= s}
-            nodes = NODES if keep is None else _compact(_early(NODES, s), keep)
+            main = {k: MAIN_LABELS.get(k, n[:2]) + n[2:] for k, n in NODES.items()}
+            nodes = main if keep is None else _compact(_early(main, s), keep)
             groups = _fit_groups(nodes, keep if keep is not None else set(nodes))
             title = (
                 "Full architecture — MLOps + AIOps pipeline on AWS (Calgary 311)"
