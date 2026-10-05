@@ -22,6 +22,10 @@ on a local fixture (``tests/test_validate.py``) the same way the feature code is
 The default thresholds are starting values. Calibrate them on the first real pull,
 where the 5-year window is ~2.9M rows.
 
+A failed Processing job uploads none of its outputs, so in the pipeline the step also gets
+``--report-s3``: when the gate fails, the report is copied there before the step exits, and
+the evidence for the failure is in S3 with the run.
+
 Run: ``python -m src.pipeline.validate --input <parquet dir> --output <dir> [--asof YYYY-MM-DD]``
 """
 
@@ -402,7 +406,22 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--asof", help="snapshot date YYYY-MM-DD (default: today, UTC)")
     p.add_argument("--baseline", help=f"previous run's {REPORT_NAME}, for the row-count check")
     p.add_argument("--strict", action="store_true", help="treat warnings as failures")
+    p.add_argument(
+        "--report-s3",
+        help=f"s3:// prefix to copy {REPORT_NAME} to if the gate fails "
+        "(a failed Processing job uploads no outputs)",
+    )
     return p.parse_args(argv)
+
+
+def upload_report(path: Path, prefix: str) -> str:
+    """Copy the report to ``<prefix>/<name>``; returns the S3 URI."""
+    import boto3
+
+    bucket, _, key = prefix.removeprefix("s3://").partition("/")
+    key = f"{key.rstrip('/')}/{path.name}".lstrip("/")
+    boto3.client("s3").upload_file(str(path), bucket, key)
+    return f"s3://{bucket}/{key}"
 
 
 def main(argv: list[str] | None = None, *, thresholds: Thresholds | None = None) -> dict:
@@ -424,12 +443,19 @@ def main(argv: list[str] | None = None, *, thresholds: Thresholds | None = None)
 
     out = Path(args.output)
     out.mkdir(parents=True, exist_ok=True)
-    (out / REPORT_NAME).write_text(json.dumps(report, indent=2, default=str))
+    path = out / REPORT_NAME
+    path.write_text(json.dumps(report, indent=2, default=str))
 
     for r in results:
         status = "PASS" if r.passed else r.severity.upper()
         log.info("%-5s %-15s %s", status, r.name, r.detail)
     if not report["passed"]:
+        if args.report_s3:
+            # a failed upload mustn't hide the failed gate: log it and still raise
+            try:
+                log.info("report copied to %s", upload_report(path, args.report_s3))
+            except Exception as e:  # noqa: BLE001
+                log.warning("could not copy the report to %s: %s", args.report_s3, e)
         raise DataValidationError(f"data validation failed: {report['failed']}")
     return report
 

@@ -52,6 +52,14 @@ def test_three_processing_steps_then_the_gate():
     assert steps["Evaluate"]["DependsOn"] == ["Train"]
 
 
+def test_validate_copies_its_report_when_the_gate_fails():
+    # a failed Processing job uploads no outputs, so the step is told where to copy it
+    args = _processing()["Validate"]["Arguments"]["AppSpecification"]["ContainerArguments"]
+    prefix = args[args.index("--report-s3") + 1]
+    output = _processing()["Validate"]["Arguments"]["ProcessingOutputConfig"]["Outputs"][0]
+    assert prefix == output["S3Output"]["S3Uri"]
+
+
 def test_every_step_is_cached_limited_and_small():
     for name, s in _processing().items():
         a = s["Arguments"]

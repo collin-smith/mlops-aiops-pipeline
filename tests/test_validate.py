@@ -6,6 +6,7 @@ import json
 import pandas as pd
 import pytest
 
+from src.pipeline import validate as validate_mod
 from src.pipeline.validate import (
     REPORT_NAME,
     DataValidationError,
@@ -157,6 +158,60 @@ def test_main_writes_report_then_raises(tmp_path, requests_frame):
     report = json.loads((out_dir / REPORT_NAME).read_text())
     assert report["passed"] is False
     assert "row_count" in report["failed"]
+
+
+def test_failed_gate_copies_the_report_to_s3(tmp_path, requests_frame, monkeypatch):
+    in_dir, out_dir = tmp_path / "input", tmp_path / "output"
+    in_dir.mkdir()
+    requests_frame.head(50).to_parquet(in_dir / "part-0.parquet")
+    copied = []
+    monkeypatch.setattr(validate_mod, "upload_report", lambda p, prefix: copied.append((p, prefix)))
+    args = ["--input", str(in_dir), "--output", str(out_dir), "--asof", "2025-06-01"]
+
+    with pytest.raises(DataValidationError):
+        main([*args, "--report-s3", "s3://b/pipeline-runs/x/validate"], thresholds=SMALL)
+    assert copied == [(out_dir / REPORT_NAME, "s3://b/pipeline-runs/x/validate")]
+
+    # an upload that fails still leaves the gate failed
+    def boom(p, prefix):
+        raise OSError("no network")
+
+    monkeypatch.setattr(validate_mod, "upload_report", boom)
+    with pytest.raises(DataValidationError):
+        main([*args, "--report-s3", "s3://b/x"], thresholds=SMALL)
+
+
+def test_passing_gate_copies_nothing(tmp_path, requests_frame, monkeypatch):
+    in_dir, out_dir = tmp_path / "input", tmp_path / "output"
+    in_dir.mkdir()
+    requests_frame.to_parquet(in_dir / "part-0.parquet")
+    monkeypatch.setattr(validate_mod, "upload_report", lambda p, prefix: pytest.fail("uploaded"))
+    args = [
+        "--input",
+        str(in_dir),
+        "--output",
+        str(out_dir),
+        "--asof",
+        str(_asof(requests_frame).date()),
+    ]
+    assert main([*args, "--report-s3", "s3://b/x"], thresholds=SMALL)["passed"]
+
+
+def test_upload_report_key(tmp_path, monkeypatch):
+    calls = []
+
+    class S3:
+        def upload_file(self, path, bucket, key):
+            calls.append((bucket, key))
+
+    import boto3
+
+    monkeypatch.setattr(boto3, "client", lambda name: S3())
+    path = tmp_path / REPORT_NAME
+    path.write_text("{}")
+    uri = validate_mod.upload_report(path, "s3://bkt/pipeline-runs/abc/validate/")
+    assert calls == [("bkt", f"pipeline-runs/abc/validate/{REPORT_NAME}")]
+    assert uri == f"s3://bkt/pipeline-runs/abc/validate/{REPORT_NAME}"
 
 
 def test_strict_turns_warnings_into_failures(tmp_path, requests_frame):

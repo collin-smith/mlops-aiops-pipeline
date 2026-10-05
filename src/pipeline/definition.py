@@ -329,7 +329,9 @@ def build_definition(
     steps = [
         _step(
             "Validate",
-            ["validate", "--input", IN_DATA, "--output", OUT, "--asof", param("AsOf")],
+            # a failed job uploads no outputs, so the step copies its report itself
+            ["validate", "--input", IN_DATA, "--output", OUT, "--asof", param("AsOf"),
+             "--report-s3", run_prefix(bucket, "Validate")],
             [code, data],
             "validation",
             depends_on=[],
