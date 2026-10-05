@@ -5,6 +5,26 @@ ADR-lite. Newest first. Seeded from the planning docs
 
 ---
 
+## D-046 — S3 lifecycle: expire scratch after 90 days; keep snapshots, pipeline runs and monitoring evidence
+
+**Status:** Accepted (2026-10-04), Collin's choice of the recommended option.
+
+**Decision:** the data-lake bucket's lifecycle configuration gains one rule per scratch prefix,
+expiring objects 90 days after they were written: `code/` (job code, uploaded again on every
+run), `glue-tmp/`, and `monitoring/datasets/`, `monitoring/injected/` and `monitoring/checks/`
+(the analyzer's inputs and outputs, recreated by `scripts/monitor_job.py`). The existing rule
+also drops expired delete markers. Kept with no expiry: `raw/` (the snapshots, D-036's
+history), `pipeline-runs/` (every registered model's `model.tar.gz`, the champion's included),
+`model-artifacts/`, `scored/`, `scored-reports/`, `monitoring/baseline/`,
+`monitoring/shadow-grade/` and `monitoring/scorecard/`.
+**Why:** cost and tidiness without losing lineage. Expiring old snapshots would undo D-036 (an
+older run could no longer be replayed), and expiring old pipeline runs would leave registered
+model versions pointing at nothing. On this project's volumes the saving is cents; the rule is
+here because a production lake needs one, and because what it leaves alone is the point.
+**How to apply:** a new prefix that is regenerable goes in `local.scratch_prefixes`
+(`infra/s3.tf`); anything a model version, a decision or an article cites stays out. The
+bucket is versioned, so an expired object is recoverable for 30 days.
+
 ## D-045 — Stage 7 monitoring runs by hand: shadow grading on the deadline-passed cohort, the analyzer as one-off jobs, a stated rule for pipeline health
 
 **Status:** Accepted (2026-10-03), Collin's choice of the recommended options. Built and tested
