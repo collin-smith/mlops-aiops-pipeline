@@ -12,7 +12,7 @@
 # the monitoring inputs and check outputs (recreated by scripts/monitor_job.py). Snapshots,
 # pipeline runs, scores, baselines and grades are kept: they are the history and the lineage.
 locals {
-  scratch_days     = 90
+  scratch_days = 90
   scratch_prefixes = [
     "code/",
     "glue-tmp/",
