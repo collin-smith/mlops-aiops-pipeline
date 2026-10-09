@@ -295,6 +295,28 @@ ARTICLE_NODES: dict[str, tuple] = {
 _BOTTOM = "exitX=1;exitY=1;entryX=0;entryY=1;"  # along the icons' lower edge, under the labels
 _UP = "exitX=0.5;exitY=0;entryX=0.5;entryY=1;"
 ARTICLE_VIEWS = {
+    1: {
+        "nodes": {
+            "socrata": (20, 110), "budgets": (400, 110), "sns": (740, 110),
+            "pull": (20, 260), "s3_raw": (400, 260), "athena": (740, 260),
+            "s3_proc": (400, 410), "glue": (740, 410),
+        },
+        "outside": ("socrata", "pull"),
+        "edges": [
+            # no label: at x=20 it would run off the left edge, and the pull's name says it
+            ("socrata", "pull", "", "exitX=0.5;exitY=1;entryX=0.5;entryY=0;", None),
+            ("budgets", "sns", "$15 / $25 alerts", _BOTTOM, None),
+            ("pull", "s3_raw", "NDJSON", _BOTTOM, None),
+            # down out of the pull, under the raw zone, into processed/
+            ("pull", "s3_proc", "Parquet snapshot", "exitX=0.5;exitY=1;entryX=0;entryY=0.85;",
+             lambda p: [(p("pull")[0] + 24, p("s3_proc")[1] + 41)]),
+            ("s3_proc", "glue", "crawl", _BOTTOM, None),
+            ("glue", "athena", "", _UP, None),
+        ],
+        "note": "The pull runs on the laptop; everything else is one Terraform stack. Athena caps each query "
+                "at 2 GB scanned, and the $25 budget action attaches a deny policy. Also in the stack, not "
+                "shown: scoped IAM roles, CloudWatch Logs and Cost Explorer.",
+    },
     2: {
         "nodes": {"s3_proc": (60, 120), "sm_train": (400, 120), "s3_model": (740, 120), "ecr": (400, 270)},
         "edges": [
