@@ -5,6 +5,56 @@ ADR-lite. Newest first. Seeded from the planning docs
 
 ---
 
+## D-047 — A flag quota shared by sector × growth class: found after the results, graded on Part B before anything is adopted
+
+**Status:** Proposed (2026-10-12), Collin's choice of the recommended option. Not adopted: the
+gate, the scoring job and the shadow model are unchanged. Amends D-045 (the shadow grade
+reports a second quota).
+
+**Context, stated plainly:** this was found **after** the challenger failed the gate (D-042),
+in the 2026-10-01 local analysis for the companion findings (not in this repo), by
+asking why DEVELOPING communities' recall trailed. It was not planned before the results.
+Same challenger, same test year (476,613 requests); only the way the 10% flag quota is
+shared out changes:
+
+- city-wide: sector 0.69, growth class 0.71
+- per sector (the current operating point, D-042): sector 0.79, growth class 0.72
+- per growth class: sector 0.69, growth class 0.85
+- **per sector × growth class: sector 0.785, growth class 0.858**
+
+Lift is 2.43–2.44× and overall recall 0.243 in every case. Under the sector × growth class
+quota, DEVELOPING recall (0.254) is above ESTABLISHED (0.247): the model ranks developing
+communities as well as established ones (PR-AUC over base rate 2.17 vs 2.11), and the
+growth-class gap came from how many flags each group was given, not from the model. What's
+left is sector: CENTRE's recall is 0.219 against SOUTHEAST's 0.279, and CENTRE also has the
+lowest lift (2.19), so that gap is the model's.
+
+**Decision:**
+- **Record the finding; don't adopt it yet.** The 0.8 floor and D-042's per-sector quota stay.
+  A quota chosen after seeing which one passes is the same move as a floor chosen after seeing
+  the results, which D-042 refused.
+- **Grade both quotas on Part B's real outcomes.** Those outcomes didn't exist when the quota
+  was found, so they are a fair test of it. The shadow grade (D-045) re-flags each scoring
+  run's rows under the sector × growth class quota, from the scores already stored, and reports
+  the second set of ratios beside the first. No new AWS job: the same Athena query, plus the
+  `score` column.
+- **Decide after Part B,** with the grade in hand. Even if adopted, sector still fails
+  (0.785 < 0.8 on the test year), so the model stays in shadow either way: this decision moves
+  the remaining fairness gap from growth class to the Centre sector; it does not end shadow mode.
+
+**Why:** the change looks free (no loss of lift) and fixes a real distortion, which is exactly
+when it's tempting to adopt it quietly. Writing down when it was found, and testing it on data
+it wasn't tuned on, keeps the gate meaning what it says.
+**How to apply:** `views.GRADE_ROWS` gains `score`; `src/deploy/grade.py` re-flags within each
+`scored_asof` run, over all of that run's rows (before `first_scores`, as the scoring job saw
+them), with `fairness.operating_point` and `cutoff_by` on sector × growth class (requests with
+no community form their own group, as now). The report keeps the scoring job's flags as the
+main grade and adds the alternative under its own key, labelled post-hoc. Part B's cohort is
+small; groups under `MIN_COMPARED_POSITIVES` stay out of both ratios.
+**Cost:** $0 beyond Part B (a few KB more scanned by the grade query).
+
+---
+
 ## D-046 — S3 lifecycle: expire scratch after 90 days; keep snapshots, pipeline runs and monitoring evidence
 
 **Status:** Accepted (2026-10-04), Collin's choice of the recommended option.
