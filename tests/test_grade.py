@@ -85,3 +85,59 @@ def test_small_groups_are_listed_but_not_compared():
         "CENTRE": False,
         "EAST": True,
     }
+
+
+def _scored(rid, outcome, score, sector, srg, scored="2026-10-01", deadline="2026-10-10"):
+    row = _row(rid, outcome, False, sector, deadline=deadline, scored=scored)
+    return {**row, "srg": srg, "score": score}
+
+
+def _with_sector_flags(rows):
+    """Set ``flagged`` the way the scoring job does: top 10% within each run's sector."""
+    df = pd.DataFrame(rows)
+    df["flagged"] = grade.reflag(df, ("sector",))
+    return df
+
+
+def test_reflag_is_per_run_and_per_cell():
+    # one run, one sector, two growth classes of 10 rows each; scores 0..19, ESTABLISHED high
+    rows = [_scored(f"E{i}", "late", 10 + i, "EAST", "ESTABLISHED") for i in range(10)]
+    rows += [_scored(f"D{i}", "late", i, "EAST", "DEVELOPING") for i in range(10)]
+    # a second run with its own top scores: it must not shift the first run's cut
+    rows += [
+        _scored(f"L{i}", "late", 100 + i, "EAST", "ESTABLISHED", scored="2026-10-08")
+        for i in range(10)
+    ]
+    df = pd.DataFrame(rows)
+    by_sector = df.loc[grade.reflag(df, ("sector",)), "service_request_id"].tolist()
+    by_cell = df.loc[grade.reflag(df, grade.POST_HOC_QUOTA), "service_request_id"].tolist()
+    assert by_sector == ["E8", "E9", "L9"]  # the run's top 10% of 20 rows: 2 rows
+    assert by_cell == ["E9", "D9", "L9"]  # one per cell of 10
+
+
+def test_post_hoc_quota_reported_beside_the_scoring_jobs_grade():
+    # EAST: established requests score high and are all on time; developing ones are late
+    rows = [_scored(f"E{i}", "on_time", 50 + i, "EAST", "ESTABLISHED") for i in range(100)]
+    rows += [_scored(f"D{i}", "late", i, "EAST", "DEVELOPING") for i in range(100)]
+    report = grade.grade(_with_sector_flags(rows))
+
+    assert report["graded"]["flagged"] == 20 and report["graded"]["recall"] == 0.0
+    alt = report["post_hoc_quota"]
+    assert alt["decision"] == "D-047" and alt["quota_by"] == "sector x srg"
+    assert alt["sector_reflag_mismatches"] == 0
+    assert alt["graded"]["flagged"] == 20  # 10 per growth class
+    assert alt["graded"]["recall"] == 0.1  # the developing cell's top 10 are all late
+    lines = grade.summary_lines(report)
+    assert any(line.startswith("post hoc (D-047)") for line in lines)
+
+
+def test_reflag_mismatch_is_counted():
+    rows = [_scored(f"E{i}", "late", i, "EAST", "ESTABLISHED") for i in range(40)]
+    df = _with_sector_flags(rows)
+    df.loc[0, "flagged"] = True  # a flag the stored scores can't explain
+    assert grade.grade(df)["post_hoc_quota"]["sector_reflag_mismatches"] == 1
+
+
+def test_no_score_column_means_no_post_hoc_section():
+    rows = [_row(f"E{i}", "late", i < 4, "EAST") for i in range(40)]
+    assert "post_hoc_quota" not in grade.grade(pd.DataFrame(rows))

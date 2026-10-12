@@ -16,6 +16,11 @@ A request still open can be scored by more than one run; it's graded once, on it
 score. The ratios use the gate's definition (min recall / max recall across groups,
 ``fairness.group_metrics``), but this is a report, not the gate: a grade never promotes
 the shadow model (D-042, D-044).
+
+**A second quota, post hoc (D-047).** Sharing the 10% across sector x growth class was
+found after the challenger failed the gate. Part B's outcomes didn't exist then, so the
+grade also re-flags each scoring run from its stored scores under that quota and reports
+it under its own key. The scoring job's flags stay the grade.
 """
 
 from __future__ import annotations
@@ -31,6 +36,8 @@ DIMENSIONS = ("sector", "srg")
 # Smaller groups are listed but left out of the ratio: a cohort of a few weeks is far
 # smaller than a test year, so the gate's 1,000-row minimum would compare nothing.
 MIN_COMPARED_POSITIVES = 30
+# D-047's quota: the top 10% within each sector x growth-class cell of a scoring run.
+POST_HOC_QUOTA = ("sector", "srg")
 
 
 def _r(v):
@@ -59,9 +66,21 @@ def deadline_passed(outcomes: pd.DataFrame) -> pd.DataFrame:
     return cohort.reset_index(drop=True)
 
 
-def _rates(frame: pd.DataFrame) -> dict:
+def reflag(outcomes: pd.DataFrame, by: tuple[str, ...], top_fraction: float = 0.10) -> pd.Series:
+    """The flags a scoring run would have set sharing its quota by ``by``: the top
+    ``top_fraction`` of stored scores within each cell, over all of that run's rows (what the
+    scoring job saw), so call it before ``first_scores``."""
+    cells = outcomes[["scored_asof", *by]].fillna(fairness.UNKNOWN).astype(str)
+    frame = pd.DataFrame(
+        {"pred": pd.to_numeric(outcomes["score"]), "cell": cells.agg("|".join, axis=1)}
+    )
+    t = fairness.FairnessThresholds(top_fraction=top_fraction, cutoff_by="cell")
+    return fairness.operating_point(frame, t)
+
+
+def _rates(frame: pd.DataFrame, flag_col: str = "flagged") -> dict:
     late = frame["outcome"] == "late"
-    flagged = frame["flagged"].astype(bool)
+    flagged = frame[flag_col].astype(bool)
     base = late.mean() if len(frame) else float("nan")
     precision = late[flagged].mean() if flagged.any() else float("nan")
     return {
@@ -75,9 +94,9 @@ def _rates(frame: pd.DataFrame) -> dict:
     }
 
 
-def _groups(frame: pd.DataFrame, dim: str) -> dict:
+def _groups(frame: pd.DataFrame, dim: str, flag_col: str = "flagged") -> dict:
     df = frame.assign(breach=(frame["outcome"] == "late").astype(int))
-    g = fairness.group_metrics(df, dim, df["flagged"].astype(bool))
+    g = fairness.group_metrics(df, dim, df[flag_col].astype(bool))
     compared = g.loc[
         (g["positives"] >= MIN_COMPARED_POSITIVES)
         & (g["group"] != fairness.UNKNOWN)
@@ -97,12 +116,18 @@ def _groups(frame: pd.DataFrame, dim: str) -> dict:
 
 def grade(outcomes: pd.DataFrame) -> dict:
     """The shadow grade: coverage, rates in the deadline-passed cohort, and per-group recall."""
+    post_hoc = "score" in outcomes.columns
+    if post_hoc:
+        outcomes = outcomes.assign(
+            flagged_by_sector=reflag(outcomes, ("sector",)).to_numpy(),
+            flagged_post_hoc=reflag(outcomes, POST_HOC_QUOTA).to_numpy(),
+        )
     scored = first_scores(outcomes)
     cohort = deadline_passed(scored)
     seen = cohort["category_seen"].astype(bool)
     days = pd.to_numeric(scored["threshold_days"])
     cohort_days = pd.to_numeric(cohort["threshold_days"])
-    return {
+    report = {
         "usage": USAGE,
         "scored_asof": sorted(scored["scored_asof"].astype(str).unique().tolist()),
         "outcome_snapshot": str(pd.to_datetime(scored["outcome_snapshot"]).max().date()),
@@ -119,6 +144,20 @@ def grade(outcomes: pd.DataFrame) -> dict:
         "dimensions": {dim: _groups(cohort.loc[seen], dim) for dim in DIMENSIONS},
         "top_graded_types": cohort["service_name"].value_counts().head(10).to_dict(),
     }
+    if post_hoc:
+        report["post_hoc_quota"] = {
+            "decision": "D-047",
+            "quota_by": " x ".join(POST_HOC_QUOTA),
+            # re-flagging by sector should reproduce the scoring job's own flags exactly
+            "sector_reflag_mismatches": int(
+                (scored["flagged_by_sector"] != scored["flagged"].astype(bool)).sum()
+            ),
+            "graded": _rates(cohort.loc[seen], "flagged_post_hoc"),
+            "dimensions": {
+                dim: _groups(cohort.loc[seen], dim, "flagged_post_hoc") for dim in DIMENSIONS
+            },
+        }
+    return report
 
 
 def summary_lines(report: dict) -> list[str]:
@@ -131,7 +170,22 @@ def summary_lines(report: dict) -> list[str]:
         f"late: flagged {g['late_rate_flagged']}, unflagged {g['late_rate_unflagged']}, "
         f"all {g['late_rate']}; lift {g['lift']}; recall {g['recall']}",
     ]
-    for dim, d in report["dimensions"].items():
+    lines += _dimension_lines(report["dimensions"])
+    alt = report.get("post_hoc_quota")
+    if alt:
+        a = alt["graded"]
+        lines += [
+            f"post hoc ({alt['decision']}), quota by {alt['quota_by']}; "
+            f"sector re-flag mismatches {alt['sector_reflag_mismatches']}",
+            f"late: flagged {a['late_rate_flagged']}; lift {a['lift']}; recall {a['recall']}",
+            *_dimension_lines(alt["dimensions"]),
+        ]
+    return lines
+
+
+def _dimension_lines(dimensions: dict) -> list[str]:
+    lines = []
+    for dim, d in dimensions.items():
         worst = d["lowest_recall_group"]
         lines.append(f"  {dim}: recall ratio {d['recall_ratio']} (lowest {worst})")
         for row in d["groups"]:

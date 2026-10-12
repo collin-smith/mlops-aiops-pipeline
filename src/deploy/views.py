@@ -53,7 +53,7 @@ VIEWS = {"shadow_outcomes": SHADOW_OUTCOMES}
 
 # Stage 7's grading rows (D-045): every score, for ``src.deploy.grade`` to dedupe and filter.
 GRADE_ROWS = """
-SELECT usage, scored_asof, service_request_id, service_name, sector, srg, flagged,
+SELECT usage, scored_asof, service_request_id, service_name, sector, srg, score, flagged,
        deadline, threshold_days, category_seen, outcome, outcome_snapshot
 FROM shadow_outcomes
 """.strip()
