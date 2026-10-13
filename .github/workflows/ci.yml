@@ -40,7 +40,7 @@ jobs:
       - name: Fail if a monitoring schedule appears anywhere
         run: |
           # Stage 7 runs Model Monitor's analyzer as one-off Processing jobs (D-045). A
-          # schedule would bill on its own clock (~$165/month hourly if forgotten).
+          # schedule would bill on its own clock (~$15/month hourly if forgotten).
           if grep -rnE 'create_monitoring_schedule|MonitoringScheduleConfig' \
             --include='*.py' --include='*.ipynb' \
             src/ notebooks/ scripts/ 2>/dev/null; then

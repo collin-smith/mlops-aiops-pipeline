@@ -56,7 +56,7 @@ items=$(sm list-endpoints --query 'Endpoints[].EndpointName')
 for e in $items; do found "endpoint $e" sm delete-endpoint --endpoint-name "$e"; done
 [[ -z "${items// /}" ]] && clean
 
-say "SageMaker monitoring schedules (Stage 7 — the biggest idle risk, ~\$165/mo if hourly)"
+say "SageMaker monitoring schedules (Stage 7 — the biggest idle risk, ~\$15/mo if hourly)"
 items=$(sm list-monitoring-schedules --query 'MonitoringScheduleSummaries[].MonitoringScheduleName')
 for s in $items; do
   found "monitoring schedule $s" sm delete-monitoring-schedule --monitoring-schedule-name "$s"

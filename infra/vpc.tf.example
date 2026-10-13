@@ -12,8 +12,9 @@
 #   3. pass subnet_ids + security_group_ids into every SageMaker job / pipeline step
 #      (Processor(..., network_config=NetworkConfig(subnets=..., security_group_ids=...)))
 #
-# Cost note: the 6 interface endpoints below bill ~$0.01/hr each (~$7.30/mo) + data
-# processing — roughly $44/mo before any compute. That is why the default build omits it.
+# Cost note: the 7 interface endpoints below bill $0.011/hr per endpoint per AZ in
+# ca-central-1 (2 AZs: ~$16/mo each) + data processing, roughly $112/mo before any compute
+# (~$96 without sagemaker.runtime). That is why the default build omits it.
 
 locals {
   azs         = ["${var.region}a", "${var.region}b"]
@@ -78,7 +79,7 @@ resource "aws_vpc_endpoint" "s3" {
   route_table_ids   = [aws_route_table.private.id]
 }
 
-# --- Interface endpoints (each ~$7.30/mo) ---
+# --- Interface endpoints (each ~$16/mo across 2 AZs) ---
 locals {
   interface_endpoints = [
     "sagemaker.api",

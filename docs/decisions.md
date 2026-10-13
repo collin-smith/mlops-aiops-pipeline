@@ -655,8 +655,9 @@ because AWS Budgets only updates a few times a day. Five controls:
    `max_run` / `MaxRuntimeInSeconds`, and `max_wait` for spot), so a stuck job ends
    itself.
 **Why:** cost control is the series' first constraint, and the biggest single risk (a
-forgotten hourly Model Monitor schedule, ~$165/month) builds up between sessions, not
-during them. All five controls cost $0.
+forgotten hourly Model Monitor schedule, ~$15/month: a ~5-minute job every hour, billed per
+second; *corrected 2026-10-13 from ~$165/month, which assumed a full instance-hour per run*)
+builds up between sessions, not during them. All five controls cost $0.
 
 ## D-029 — One short-lived Serverless Inference demo in Stage 6 (amends D-007)
 
@@ -837,8 +838,12 @@ jobs, CloudWatch, SNS, EventBridge, IAM, Budgets) is regional / managed. `infra/
 **no `aws_vpc`, no subnets, no NAT**. SageMaker jobs run in AWS's managed VPC — `VpcConfig`
 is not set.
 **Why:** the enterprise pattern (SageMaker jobs in private subnets reaching S3/ECR/SageMaker/
-CloudWatch/STS only through VPC endpoints, no IGW/NAT) needs ~6 interface endpoints at
-~$7.30/month each ≈ **$44/month** — several times the whole project's $8 cap, for a teaching
+CloudWatch/STS only through VPC endpoints, no IGW/NAT) needs 7 interface endpoints, each
+billed per hour in every AZ it sits in: at $0.011/hour in ca-central-1 across 2 AZs, about
+$16/month each ≈ **$112/month** (≈ $96 without `sagemaker.runtime`, which batch scoring
+doesn't need; half that in one AZ). *Corrected 2026-10-13: first recorded as ≈ $44/month,
+which used the us-east-1 price for 6 endpoints in one AZ.* Several times the whole
+project's $8 cap, for a teaching
 series where the subject is the ML lifecycle, not networking (the EKS series already covered
 networking).
 **How to apply:** the VPC-hardened variant is a first-class *documented* artifact —
