@@ -125,4 +125,20 @@ the scores against real outcomes through the view `shadow_outcomes`.
 Test-year numbers for this model: ROC-AUC 0.710, PR-AUC 0.374, top-decile lift 2.43× (44.1% of
 flagged requests run late). On the same test year, sharing the 10% quota by sector **and**
 growth class brings the growth-class ratio to 0.86 with no loss of lift; the sector ratio
-(0.785) still fails, on CENTRE. Not adopted: noted for Stage 7.
+(0.785) still fails, on CENTRE. Graded on real outcomes in Stage 7 and not adopted (D-047).
+
+### Shadow grade (Stage 7, D-045)
+
+Outcomes from the 2026-10-16 snapshot, each request graded once on its first score, only once
+its deadline had passed. 4,905 of 14,465 were gradeable (34%; median deadline 14 days, against
+148 for everything scored), so the grade leans towards short-deadline request types. Rates
+below exclude the 388 graded requests of categories unseen in training (none flagged; 44% late).
+
+| | Graded | Late rate, flagged | Late rate, not flagged | Lift | Recall | Sector ratio | Growth-class ratio |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Scoring job's flags (10% per sector) | 4,517 | 0.809 (278 flagged) | 0.571 | 1.38 | 0.085 | 0.66 (lowest WEST) | 0.41 (lowest DEVELOPING) |
+| D-047, re-flagged post hoc (sector × growth class) | 4,517 | 0.800 | — | 1.37 | 0.085 | 0.67 (lowest NORTHEAST) | 0.33 (lowest DEVELOPING) |
+
+The base late rate (0.585) is far above the test year's 18% because the scored set is open
+requests, already the slow tail. The model stays in shadow; a grade informs the next decision
+and promotes nothing.
