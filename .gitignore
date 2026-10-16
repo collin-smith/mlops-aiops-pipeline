@@ -40,3 +40,9 @@ crash.log
 # saved plans hold every variable in plain text, including terraform.tfvars values
 *.tfplan
 infra/*.plan
+
+# Terraform, lookup-page stack (D-048)
+infra-lookup/.terraform/
+infra-lookup/.terraform.lock.hcl
+infra-lookup/backend.hcl
+infra-lookup/*.plan

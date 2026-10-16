@@ -72,3 +72,6 @@ jobs:
       - run: terraform fmt -check -recursive
       - run: terraform init -backend=false
       - run: terraform validate
+      - name: lookup-page stack (D-048)
+        working-directory: infra-lookup
+        run: terraform fmt -check && terraform init -backend=false && terraform validate

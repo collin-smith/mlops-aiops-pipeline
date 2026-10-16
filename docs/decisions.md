@@ -5,6 +5,31 @@ ADR-lite. Newest first. Seeded from the planning docs
 
 ---
 
+## D-048 — The community lookup page: its own small stack, S3 + CloudFront, kept after the teardown
+
+**Status:** Accepted (2026-10-16), Collin's choice (bucket name and URL). Built; not yet applied.
+
+**Decision:**
+- **A separate stack, `infra-lookup/`,** with its own state key (`lookup/terraform.tfstate`) in
+  the existing state bucket. The end-of-series `terraform destroy` in `infra/` doesn't touch it,
+  so the page stays up after the pipeline is gone. The state bucket therefore stays too; only
+  `base/terraform.tfstate` goes with the teardown.
+- **Private bucket `yyc311-neighbourhood-lookup` behind CloudFront** with Origin Access Control:
+  all public access blocked, only this distribution can read it, HTTPS only, AWS's managed
+  security-headers policy, North America + Europe edge locations.
+- **The CloudFront address, no custom domain.** A domain would cost about $15–20 a year plus
+  $0.50 a month for the Route 53 zone, and adds nothing the page needs.
+- **Tagged `project = yyc311-lookup`,** not `mlops-aiops`, so the series' cost reports and its
+  $25 hard stop measure the series alone. The account-wide safety net still covers it.
+
+**Why the name:** S3 names are global, and one starting with the City's name would read as an
+official City site. The open-data licence forbids implying endorsement. Behind CloudFront the
+bucket name isn't public anyway.
+**Cost:** $0 at this size: CloudFront's always-free tier covers 1 TB and 10 million requests a
+month, and the page is about 150 KB.
+
+---
+
 ## D-047 — A flag quota shared by sector × growth class: found after the results, graded on Part B before anything is adopted
 
 **Status:** Not adopted (2026-10-16), Collin's choice of the recommended option, after Part B

@@ -1,0 +1,6 @@
+# Copy to backend.hcl (git-ignored). Same state bucket as infra/, a different key.
+bucket       = "mlops-aiops-tfstate-<account-id>"
+key          = "lookup/terraform.tfstate"
+region       = "ca-central-1"
+encrypt      = true
+use_lockfile = true
