@@ -7,9 +7,10 @@ ADR-lite. Newest first. Seeded from the planning docs
 
 ## D-047 — A flag quota shared by sector × growth class: found after the results, graded on Part B before anything is adopted
 
-**Status:** Proposed (2026-10-12), Collin's choice of the recommended option. Not adopted: the
-gate, the scoring job and the shadow model are unchanged. Amends D-045 (the shadow grade
-reports a second quota).
+**Status:** Not adopted (2026-10-16), Collin's choice of the recommended option, after Part B
+(see "Part B result" below). Proposed 2026-10-12. The gate, the scoring job, the shadow model
+and D-042's per-sector quota are unchanged. Amends D-045 (the shadow grade reports a second
+quota).
 
 **Context, stated plainly:** this was found **after** the challenger failed the gate (D-042),
 in the 2026-10-01 local analysis for the companion findings (not in this repo), by
@@ -52,6 +53,23 @@ no community form their own group, as now). The report keeps the scoring job's f
 main grade and adds the alternative under its own key, labelled post-hoc. Part B's cohort is
 small; groups under `MIN_COMPARED_POSITIVES` stay out of both ratios.
 **Cost:** $0 beyond Part B (a few KB more scanned by the grade query).
+
+**Part B result (2026-10-16):** the 14,465 requests scored on 2026-10-01, graded against the
+2026-10-16 snapshot. 4,905 (34%) had passed their deadline, mostly short-deadline request types
+(median deadline 14 days, against 148 for everything scored). Recall ratios, flags as the
+scoring job set them → re-flagged under the sector × growth class quota:
+
+- sector 0.659 (lowest WEST) → 0.667 (lowest NORTHEAST)
+- growth class 0.413 (lowest DEVELOPING) → 0.327 (lowest DEVELOPING)
+- lift 1.38 → 1.37; recall 0.085 → 0.085
+- re-flag mismatches against the stored flags: 0
+
+The growth-class gain seen on the test year didn't appear: DEVELOPING recall moved from 0.056 to
+0.059, and the ratio fell because COMPLETE (141 rows) rose. The cohort is small and skewed toward
+quick request types, so this doesn't prove the quota wrong. But the rule set on 2026-10-12 was to
+adopt it only if it held up on outcomes it wasn't tuned on, and it didn't. **Not adopted.** No
+second grade is planned before the series ends; half of the scored requests have deadlines
+after late February 2027. The grade keeps reporting the post-hoc quota beside the main one.
 
 ---
 
